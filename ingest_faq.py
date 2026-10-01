@@ -1,6 +1,7 @@
 """
 Ingests data/faq.csv into the 'faq' Chroma collection.
-Run once (or whenever the CSV changes): python ingest_faq.py
+Safe to re-run: it replaces the collection each time.
+Run whenever the CSV changes: python ingest_faq.py
 """
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -9,13 +10,10 @@ from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-CHROMA_DIR = "chroma_store"
-COLLECTION  = "faq"
-CSV_PATH    = os.path.join("data", "faq.csv")
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+from config import CHROMA_DIR, EMBED_MODEL, FAQ_COLLECTION, FAQ_CSV_PATH
 
 
-def load_faq_documents(csv_path: str) -> list[Document]:
+def load_faq_documents(csv_path) -> list[Document]:
     df = pd.read_csv(csv_path)
     docs = []
     for _, row in df.iterrows():
@@ -29,19 +27,26 @@ def load_faq_documents(csv_path: str) -> list[Document]:
 
 def main():
     print("Loading FAQ documents...")
-    docs = load_faq_documents(CSV_PATH)
+    docs = load_faq_documents(FAQ_CSV_PATH)
     print(f"  {len(docs)} FAQ entries loaded.")
 
     print("Initialising embedding model...")
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
 
-    print(f"Embedding and storing in Chroma collection '{COLLECTION}'...")
-    vectorstore = Chroma.from_documents(
-        documents=docs,
-        embedding=embeddings,
-        collection_name=COLLECTION,
+    vectorstore = Chroma(
+        collection_name=FAQ_COLLECTION,
+        embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
     )
+
+    # Empty the collection first so re-running replaces the data instead of duplicating it
+    existing_ids = vectorstore.get()["ids"]
+    if existing_ids:
+        print(f"  Removing {len(existing_ids)} existing vectors...")
+        vectorstore.delete(ids=existing_ids)
+
+    print(f"Embedding and storing in Chroma collection '{FAQ_COLLECTION}'...")
+    vectorstore.add_documents(docs)
     print(f"  Done. {vectorstore._collection.count()} vectors stored.")
 
 

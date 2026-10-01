@@ -9,29 +9,32 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import RunnableLambda
 from langchain_core.documents import Document
 
-CHROMA_DIR  = "chroma_store"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+from config import (
+    CHROMA_DIR, EMBED_MODEL,
+    FAQ_COLLECTION, TICKETS_COLLECTION, GUIDES_COLLECTION,
+    K_FAQ, K_TICKETS, K_GUIDES,
+)
 
 
 def build_retriever(
-    k_faq: int = 3,
-    k_tickets: int = 3,
-    k_guides: int = 3,
+    k_faq: int = K_FAQ,
+    k_tickets: int = K_TICKETS,
+    k_guides: int = K_GUIDES,
 ) -> RunnableLambda:
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
 
     faq_store = Chroma(
-        collection_name="faq",
+        collection_name=FAQ_COLLECTION,
         embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
     )
     tickets_store = Chroma(
-        collection_name="tickets",
+        collection_name=TICKETS_COLLECTION,
         embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
     )
     guides_store = Chroma(
-        collection_name="guides",
+        collection_name=GUIDES_COLLECTION,
         embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
     )

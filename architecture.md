@@ -81,11 +81,13 @@ flowchart TB
     L5["<b>Ingestion Layer</b><br/>ingest_faq.py · ingest_tickets.py · ingest_pdf.py<br/><i>Load → transform → embed → store</i>"]
     L6["<b>Source Data Layer</b><br/>faq.csv · tickets.db · telecom_guide.pdf<br/>seed_tickets.py · generate_pdf.py"]
     EXT["<b>External Services</b><br/>Groq API (LLM) · HuggingFace Hub (model download)"]
+    CFG["<b>Configuration</b><br/>config.py<br/><i>Paths, model names, chunking, k values</i>"]
 
     L1 --> L2 --> L3 --> L4
     L6 --> L5 --> L4
     L2 -.-> EXT
     L5 -.-> EXT
+    CFG -.-> L2 & L3 & L5
 ```
 
 | Layer | Files | Responsibility | Technology |
@@ -97,12 +99,15 @@ flowchart TB
 | Ingestion | `ingest_*.py` | ETL into vector store | pandas, sqlite3, PyPDF, text splitters |
 | Source data | `data/` | Raw knowledge | CSV, SQLite, PDF (fpdf2) |
 | External | — | Inference & model hosting | Groq, HuggingFace |
+| Configuration (cross-cutting) | `config.py` | Single source of truth for paths, collection names, embedding/LLM models, chunking and k values | Python `pathlib` |
 
 ---
 
 ## 3. Offline Ingestion Pipeline
 
 Each knowledge source has its own ingestion script following the classic **ETL (Extract → Transform → Load)** pattern.
+
+Every run is **idempotent**: before loading, the script deletes all existing vectors in its own collection, then adds the fresh set. Re-running a script therefore replaces its data rather than duplicating it, and never touches the other two collections. The collection is emptied in place (not dropped), so ChromaDB keeps reusing the same on-disk index folder.
 
 ```mermaid
 flowchart LR
@@ -116,7 +121,7 @@ flowchart LR
     end
     subgraph GD["Guide pipeline"]
         direction LR
-        C1["Extract<br/>PyPDFLoader (per page)"] --> C2["Transform<br/>RecursiveCharacterTextSplitter<br/>600 chars · 100 overlap"] --> C3["Embed<br/>MiniLM → 384-dim"] --> C4[("Load<br/>Chroma 'guides'")]
+        C1["Extract<br/>PyPDFLoader (per page)"] --> C1b["Clean<br/>strip repeated header<br/>+ 'Page N' footer"] --> C2["Transform<br/>RecursiveCharacterTextSplitter<br/>600 chars · 100 overlap"] --> C3["Embed<br/>MiniLM → 384-dim"] --> C4[("Load<br/>Chroma 'guides'")]
     end
 ```
 
@@ -126,7 +131,7 @@ flowchart LR
 |---|---|---|
 | FAQ | None — one row is one document | Each Q&A is short and self-contained |
 | Tickets | None — one ticket is one document | A ticket's issue and resolution must stay together to be useful |
-| PDF guide | 600-char chunks, 100-char overlap, split on `\n\n` → `\n` → `.` → space | Pages are long; small chunks give precise matches, and overlap prevents a sentence being cut in half across chunks |
+| PDF guide | Header/footer stripped, then 600-char chunks, 100-char overlap, split on `\n\n` → `\n` → `.` → space | Pages are long; small chunks give precise matches, and overlap prevents a sentence being cut in half across chunks. Removing the repeated page header and "Page N" footer keeps boilerplate out of the embeddings |
 
 ### Metadata stored with each vector
 
@@ -233,6 +238,7 @@ flowchart TB
 | Embedding model | Downloaded once to the HuggingFace cache, then runs locally on CPU |
 | LLM | Remote — Groq API |
 | Dependencies | `pyproject.toml` + `uv.lock` (managed by `uv`) |
+| Settings | `config.py`; all paths are absolute, built from the project folder, so scripts run from any working directory |
 
 ---
 
@@ -251,6 +257,8 @@ flowchart TB
 | 9 | **Only `resolved` tickets ingested** | Escalated/unresolved tickets have no reliable fix to recommend | Loses signal from open cases |
 | 10 | **Shared chain via `@st.cache_resource`** | Embedding model and DB connections are loaded once per server, not per message | Changes to the vector store require an app restart |
 | 11 | **Two front-ends over one chain** | UI and CLI reuse identical logic (`build_chain()`) | — |
+| 12 | **Central `config.py`** | One definition of the embedding model guarantees ingestion and retrieval always match; tuning needs one edit | Settings are code, not environment variables, so changing them means editing a file |
+| 13 | **Clean PDF text before chunking** | Repeated headers/footers carry no meaning and blur chunk embeddings | Patterns are specific to this PDF's layout |
 
 ---
 
@@ -271,8 +279,6 @@ flowchart TB
 
 **Current limitations**
 
-- Re-running an ingest script **appends** to the existing collection (no document IDs / no reset), creating duplicate vectors. Delete `chroma_store/` before a full re-ingest.
-- The system prompt mentions only *two* sources (FAQ, tickets) though three are retrieved.
 - No conversation memory — follow-up questions like "and how do I fix that?" lose context.
 - No evaluation suite to measure answer quality.
 
@@ -300,7 +306,7 @@ flowchart LR
 
 | Area | Improvement |
 |---|---|
-| Ingestion | Deterministic IDs + upsert; scheduled sync from the live ticketing system |
+| Ingestion | Incremental upserts with deterministic IDs (today each run fully reloads its collection); scheduled sync from the live ticketing system |
 | Retrieval | Hybrid search (keyword + vector), similarity threshold, cross-encoder re-ranking |
 | Conversation | Pass chat history and rewrite follow-up questions into standalone queries |
 | Answers | Show source citations (ticket ID, FAQ ID, guide page) to the user |

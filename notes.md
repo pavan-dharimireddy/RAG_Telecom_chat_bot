@@ -16,13 +16,14 @@ For diagrams and system design, see [architecture.md](architecture.md).
 5. [Script-by-script guide](#5-script-by-script-guide)
    - [data/generate_pdf.py](#51-datagenerate_pdfpy--creates-the-reference-manual)
    - [data/seed_tickets.py](#52-dataseed_ticketspy--creates-the-past-support-cases)
-   - [ingest_faq.py](#53-ingest_faqpy--teaches-the-bot-the-faqs)
-   - [ingest_tickets.py](#54-ingest_ticketspy--teaches-the-bot-past-cases)
-   - [ingest_pdf.py](#55-ingest_pdfpy--teaches-the-bot-the-manual)
-   - [retriever.py](#56-retrieverpy--the-librarian)
-   - [rag_chain.py](#57-rag_chainpy--the-brain)
-   - [app.py](#58-apppy--the-website)
-   - [main.py](#59-mainpy--the-terminal-version)
+   - [config.py](#53-configpy--the-settings-file)
+   - [ingest_faq.py](#54-ingest_faqpy--teaches-the-bot-the-faqs)
+   - [ingest_tickets.py](#55-ingest_ticketspy--teaches-the-bot-past-cases)
+   - [ingest_pdf.py](#56-ingest_pdfpy--teaches-the-bot-the-manual)
+   - [retriever.py](#57-retrieverpy--the-librarian)
+   - [rag_chain.py](#58-rag_chainpy--the-brain)
+   - [app.py](#59-apppy--the-website)
+   - [main.py](#510-mainpy--the-terminal-version)
 6. [Data files](#6-data-files)
 7. [Configuration files](#7-configuration-files)
 8. [How to run it (step by step)](#8-how-to-run-it-step-by-step)
@@ -57,15 +58,231 @@ When a customer asks something, the agent quickly flips through all three, picks
 |---|---|
 | **RAG** (Retrieval-Augmented Generation) | "Look it up first, then answer." Retrieve relevant documents → give them to the AI → AI generates the answer. |
 | **LLM** (Large Language Model) | The AI that writes human-like text. Here: **Qwen3.8-27B**, running on **Groq**'s servers. |
-| **Embedding** | Turning a sentence into a list of 384 numbers that captures its *meaning*. Sentences with similar meaning get similar numbers — "internet is slow" and "data speed is poor" end up close together even though they share no words. |
+| **Embedding** | Turning a sentence into a list of 384 numbers(dimensions) that captures its *meaning*. Sentences with similar meaning get similar numbers — "internet is slow" and "data speed is poor" end up close together even though they share no words. |
 | **Embedding model** | The tool that makes embeddings. Here: **all-MiniLM-L6-v2**, a small free model that runs on your own computer. |
 | **Vector database** | A database that stores embeddings and can quickly find "the ones most similar to this question". Here: **ChromaDB**. |
-| **Collection** | A named folder inside the vector database. We have three: `faq`, `tickets`, `guides`. |
+| **Collection** | A named group of documents inside the vector database, like a separate table or drawer. We have three: `faq`, `tickets`, `guides`. (They are not folders with those names; see "Where are the collections stored?" below.) |
 | **Chunking** | Cutting a long document into small pieces so searches can find the exact relevant paragraph. |
 | **Ingestion** | The one-time process of reading the documents, embedding them, and saving them to the vector database. |
 | **Prompt** | The instructions + context + question sent to the AI. |
 | **LangChain** | A Python library that connects all these pieces (database, prompt, AI) into a pipeline. |
 | **Streamlit** | A Python library that turns a script into a website with almost no web-development code. |
+
+### Common questions about embeddings
+
+**Q: Does every embedding create only 384 vectors?**
+
+No. Every piece of text(chunk) becomes **one** vector, and that one vector is a list of **384 numbers(dimensions)**.
+
+- **Vector** = one list of numbers that represents one piece of text.
+- **384** = how many numbers are in that list.
+
+| Text | What it becomes |
+|---|---|
+| "Why is my internet slow?" | 1 vector → `[0.021, -0.113, 0.047, …]` (384 numbers) |
+| One FAQ entry | 1 vector (384 numbers) |
+| One chunk of the PDF manual | 1 vector (384 numbers) |
+
+A short question and a long paragraph both come out as exactly 384 numbers. The length of the list never changes.
+
+**Q: So how many vectors are stored in the database?**
+
+One for every piece of text we saved:
+
+- `faq`: 25 vectors (one per FAQ)
+- `tickets`: 19 vectors (one per solved ticket)
+- `guides`: one per chunk of the PDF
+
+Each of those vectors is 384 numbers long.
+
+**Q: What are "dimensions"? Is that the same as the 384 numbers?**
+
+Yes. Here, **"384 dimensions" and "384 numbers" mean the same thing.** "Dimensions" is just the technical word for how many numbers are in each vector.
+
+Think of describing where something is:
+
+| Describing… | Dimensions | Numbers needed |
+|---|---|---|
+| A point on a ruler | 1 | `[5]` |
+| A place on a map (left-right, up-down) | 2 | `[5, 3]` |
+| A spot in a room (left-right, up-down, front-back) | 3 | `[5, 3, 2]` |
+| The **meaning** of a sentence (this project) | 384 | `[0.021, -0.113, …]` (384 of them) |
+
+A map needs 2 numbers to pin a location. Meaning is far richer than a location, so the model uses 384 numbers to pin a sentence in a "meaning space". Sentences that mean similar things land close together. That's how the bot finds the right FAQs and tickets even when the customer uses different words.
+
+**Q: Why exactly 384? Can it be different?**
+
+The number is fixed by the embedding model you choose. This project's model (`all-MiniLM-L6-v2`) always gives 384. Other models give other sizes:
+
+| Model | Numbers per vector |
+|---|---|
+| all-MiniLM-L6-v2 (this project) | 384 |
+| all-mpnet-base-v2 | 768 |
+| OpenAI text-embedding-3-small | 1536 |
+| OpenAI text-embedding-3-large | 3072 |
+
+More numbers can capture meaning in finer detail, but they take more storage and make searches slower. 384 is a good balance for a small project.
+
+**Q: Why must the same model be used everywhere?**
+
+The customer's question is turned into 384 numbers by the same model, then compared with the stored vectors. If the stored documents used one model and the question used another, it would be like comparing a map location with a room location: the numbers wouldn't line up. That's why the model name is defined **once**, as `EMBED_MODEL` in [config.py](config.py), and both the ingest scripts and [retriever.py](retriever.py) read it from there.
+
+### Common questions about vector databases
+
+**Q: What does a vector database actually do?**
+
+It stores the vectors (the 384-number lists) together with the original text, and very quickly answers one question: *"Which stored texts are closest in meaning to this one?"*
+
+A normal database (like Excel or SQL) finds rows by **exact** match, e.g. `category = "billing"`. A vector database finds rows by **similar meaning**, e.g. "internet is slow" also finds "poor data speed".
+
+**Q: Where are the collections stored? I can't find a `faq`, `tickets` or `guides` folder.**
+
+That's expected. A collection is a **named group inside the database**, not a folder you can see with that name. ChromaDB gives each collection a random ID and uses it internally. Inside `chroma_store/` you'll find:
+
+```
+chroma_store/
+├── chroma.sqlite3                          ← the "master file"
+├── 4f898b0d-b921-4760-b42d-4f7741bf4fbc/   ← search index for 'faq'
+├── 2521d5de-a9af-493e-bac1-b9e20fe7e1a2/   ← search index for 'tickets'
+└── 3e1ecf31-2237-4a74-a752-11c7e6fb59d3/   ← search index for 'guides'
+```
+
+*(The long IDs will be different on your computer; they are generated randomly. They also change if you delete `chroma_store/` and rebuild it.)*
+
+Each ID-named folder holds a fast search index of that collection's vectors (files like `data_level0.bin` and `header.bin`), arranged so the closest matches are found quickly.
+
+So the names `faq`, `tickets` and `guides` live *inside* `chroma.sqlite3`, and each one points to one of the ID-named folders. You never open these files by hand; the code opens a collection by name, e.g. `Chroma(collection_name=FAQ_COLLECTION, ...)` in [retriever.py](retriever.py), where `FAQ_COLLECTION` is `"faq"` (set in [config.py](config.py)).
+
+**Q: How can I see which ID folder belongs to which collection, and how much is in each?**
+
+Run this from the project folder. It only reads the database and doesn't change anything:
+
+```bash
+python -c "import chromadb; c = chromadb.PersistentClient('chroma_store'); [print(col.name, '->', col.count(), 'vectors') for col in c.list_collections()]"
+```
+
+Expected result (the order may vary):
+
+```
+faq -> 25 vectors
+guides -> 36 vectors
+tickets -> 19 vectors
+```
+
+These numbers should match your data: 25 FAQs, 19 solved tickets, and 36 PDF chunks.
+
+**Q: This project uses ChromaDB. Are there other vector databases?**
+
+Yes, many. They all do the same core job; they differ in size, hosting and extra features.
+
+| Vector database | Type | Best for | Notes |
+|---|---|---|---|
+| **ChromaDB** *(this project)* | Open source · runs inside your app or as a server | Learning, prototypes, small apps | Easiest to start with; saves to a local folder (`chroma_store/`) |
+| **Qdrant** | Open source · self-hosted or managed cloud | Production apps needing speed and filtering | Written in Rust; very fast; strong filtering by metadata (e.g. "only billing tickets") |
+| **Pinecone** | Fully managed cloud service (paid, free tier) | Teams that don't want to run servers | No setup; scales automatically; data lives on Pinecone's servers |
+| **Weaviate** | Open source · self-hosted or managed cloud | Hybrid search (keywords + meaning) | Built-in modules can create embeddings for you |
+| **Milvus / Zilliz** | Open source (Milvus) · managed cloud (Zilliz) | Very large data (billions of vectors) | Built for big-company scale |
+| **FAISS** | Open-source library by Meta (not a full database) | Fast in-memory search, research | Extremely fast, but no built-in storage server or metadata filtering |
+| **pgvector** | Extension for PostgreSQL | Teams already using PostgreSQL | Keep normal data and vectors in one database |
+| **Elasticsearch / OpenSearch** | Search engines with vector support | Companies already using them for text search | Good at combining keyword and vector search |
+| **Redis** | In-memory database with vector search | Very low-latency apps | Very fast because data lives in memory |
+| **MongoDB Atlas Vector Search** | Vector search inside MongoDB's cloud | Teams already using MongoDB | Vectors stored next to normal documents |
+
+**Q: When would you switch to something like Qdrant or Pinecone?**
+
+| Situation | Better choice |
+|---|---|
+| Millions of documents, many users at once | Qdrant, Milvus, Pinecone |
+| Don't want to manage any servers | Pinecone, Qdrant Cloud, Weaviate Cloud |
+| Already have a PostgreSQL database | pgvector |
+| Need heavy filtering ("only roaming tickets from 2025") | Qdrant, Weaviate |
+| Just learning or prototyping | ChromaDB (current choice), FAISS |
+
+**Q: How hard is it to switch?**
+
+Fairly easy, thanks to LangChain. Each database has a LangChain package (e.g. `langchain-qdrant`, `langchain-pinecone`), so you mainly change the `Chroma(...)` lines in the ingest scripts and [retriever.py](retriever.py), then re-run the ingest scripts. The embedding model, prompt and app stay the same.
+
+### Common questions about chunking
+
+**Q: What is chunking?**
+
+Chunking means **cutting documents into smaller pieces before saving them** in the vector database. Each piece (a "chunk") gets its own vector, and search returns whole chunks.
+
+Think of highlighting a textbook before an exam. You don't memorise the whole book as one blob; you mark the paragraphs so you can find the right one fast. Chunking decides **where those boundaries go**.
+
+**Q: Why is chunking done correctly so important?**
+
+Because the AI can only answer from the chunks the search hands it. Bad chunks lead to bad answers, even with a great AI model.
+
+| If chunks are… | What goes wrong | Example |
+|---|---|---|
+| **Too big** (a whole page) | One chunk mixes many topics, so its meaning gets blurry and it matches poorly. The AI also has to read lots of irrelevant text. | A page about "SIM cards" also covers eSIM, PIN codes and SIM swaps. A question about PIN codes gets the whole page. |
+| **Too small** (one sentence) | Pieces lose their context. | A chunk saying "Toggle it off and on again" without saying *what* to toggle. |
+| **Cut in the wrong place** | A step, a sentence, or a problem and its solution get split apart. | A ticket's *problem* in one chunk and its *resolution* in another: the bot finds the problem but not the fix. |
+| **Just right** | Each chunk covers one idea, completely. | One FAQ Q&A; one ticket with its fix; one paragraph about APN settings. |
+
+**Rule of thumb:** a good chunk should make sense if you read it on its own.
+
+**Q: How does this project chunk each file?**
+
+Each file type is treated differently, because each has a different natural shape:
+
+| File | Script | Chunking method | 1 chunk = | Chunks | Size of each chunk (characters) | Why this choice |
+|---|---|---|---|---|---|---|
+| `faq.csv` | [ingest_faq.py](ingest_faq.py) | **No splitting**: one row, one chunk | One question + its answer | 25 | 184 – 315 (avg 250) | Each Q&A is already short and complete. Splitting would separate the question from its answer. |
+| `tickets.db` | [ingest_tickets.py](ingest_tickets.py) | **No splitting**: one record, one chunk (issue + description + resolution joined together) | One solved support case | 19 | 277 – 424 (avg 351) | The problem and its fix must stay together. That pairing is what makes a ticket useful. |
+| `telecom_guide.pdf` | [ingest_pdf.py](ingest_pdf.py) | **Clean, then recursive character splitting**, 600 characters max, 100 overlap | About one paragraph of the manual | 36 (from 9 pages) | 121 – 596 (avg 502) | Pages are long and cover several topics, so they're cut into paragraph-sized pieces. |
+
+**How the PDF is cut, step by step:**
+
+1. The PDF is read **page by page**. Chunks never cross from one page to the next.
+2. **Each page is cleaned first:** the header line (*"Telecom Technical Reference Guide - Internal Use Only"*) and the page-number footer (*"Page 2"*, *"Page 3"*…) are removed. They appear on every page but say nothing about the topic.
+3. The splitter tries to keep each chunk under **600 characters**, cutting at the "nicest" place it can find, in this order of preference:
+   1. a blank line (`\n\n`), which is the end of a paragraph
+   2. a line break (`\n`)
+   3. a full stop (`.`), the end of a sentence
+   4. a space, which at least doesn't cut a word in half
+4. **Overlap:** up to **100 characters** at the end of one chunk may be repeated at the start of the next, so an idea sitting on the border isn't lost. In this PDF, 12 of the 35 neighbouring chunk pairs share overlapping text, for example the sentence *"detect duplicates via idempotency keys; if not, the agent must manually reverse the extra charge."* appears at the end of one chunk and the start of the next. The others split cleanly at a paragraph or line break, so no overlap was needed.
+
+**Why the cleaning step matters (a real example from this project):** the first version of `ingest_pdf.py` didn't clean the pages, so the header and footer were read as normal text, and **9 of the 37 chunks** contained them. It didn't break anything, but it was noise that slightly blurred those chunks' meaning. Removing them before chunking brought that to **0**, and the total to 36 chunks. Lesson: **look at your chunks.** Repeated headers, footers, page numbers and copyright lines are common in PDFs and are easy to miss.
+
+**Q: What are the different types of chunking?**
+
+| Type | How it works | Good for | Downsides |
+|---|---|---|---|
+| **No chunking (one record = one chunk)** *(used for FAQ and tickets)* | Each row, record or item is saved as it is | Short, self-contained items: FAQs, tickets, product listings | Doesn't work for long documents |
+| **Fixed-size** | Cut every N characters (or words/tokens), no matter what | Quick experiments | Cuts mid-sentence or even mid-word |
+| **Recursive character** *(used for the PDF)* | Try to cut at paragraphs, then lines, then sentences, then spaces, staying under a size limit | General-purpose text. The most common default. | Doesn't understand meaning, only punctuation and line breaks |
+| **Sentence-based** | Cut only at sentence ends, grouping a few sentences per chunk | Articles, emails, chat logs | Sentence lengths vary a lot, so chunk sizes are uneven |
+| **Structure-aware (document-based)** | Follow the document's own structure: headings, sections, Markdown titles, HTML tags, code functions | Manuals, wikis, web pages, code | Needs clean structure in the source |
+| **Semantic** | Use an embedding model to find where the **topic changes**, and cut there | Long documents with mixed topics | Slower and more expensive (it embeds everything while chunking) |
+| **Token-based** | Measure size in **tokens** (what the AI counts) instead of characters | Staying exactly within model limits | Needs a tokenizer; otherwise the same weaknesses as fixed-size |
+| **Parent–child (small-to-big)** | Search on small chunks for precision, but give the AI the larger "parent" section it came from | When you need both precise matches and full context | More complex to build and store |
+| **Agentic / LLM-based** | Ask an AI model to decide the boundaries | Messy or unusual documents | Slowest and costliest; results can vary |
+
+**Q: What are chunk size and overlap, and how do I choose them?**
+
+| Setting | Meaning | This project | Typical range |
+|---|---|---|---|
+| **Chunk size** | Maximum length of one chunk | 600 characters (about 100 words) | 300–1,500 characters |
+| **Chunk overlap** | Text repeated between neighbouring chunks | 100 characters (about 15%) | 10–20% of chunk size |
+
+- **Smaller chunks** give more precise matches but less context in each.
+- **Bigger chunks** carry more context, but they're less precise and use more of the AI's space.
+- **The embedding model has a limit too.** `all-MiniLM-L6-v2` only reads about the first 256 tokens (roughly 1,000 characters) of any text and ignores the rest. So chunks much bigger than that would be only partly understood. 600 characters sits safely inside the limit.
+
+There's no perfect number. The practical approach is to try a few sizes, ask real test questions, and keep the setting that returns the most useful chunks.
+
+**Q: How would I change the chunking in this project?**
+
+Edit these two lines in [config.py](config.py), then re-run `python ingest_pdf.py` and restart the app:
+
+```python
+CHUNK_SIZE    = 600
+CHUNK_OVERLAP = 100
+```
+
+The FAQ and ticket scripts don't need chunking settings, because each item is already the right size.
 
 ---
 
@@ -101,6 +318,7 @@ rag_telecom_chatbot/
 │
 ├── app.py               ← 🌐 The chatbot website (start here to use it)
 ├── main.py              ← 💻 Same chatbot, in the terminal
+├── config.py            ← ⚙️ All settings in one place (paths, models, chunking, k)
 ├── rag_chain.py         ← 🧠 Connects: search → prompt → AI → answer
 ├── retriever.py         ← 🔎 Searches the three knowledge collections
 │
@@ -122,6 +340,7 @@ rag_telecom_chatbot/
 ├── pyproject.toml       ← List of Python libraries the project needs
 ├── uv.lock              ← Exact pinned versions of those libraries
 ├── README.md            ← Quick-start instructions
+├── LICENSE              ← MIT licence: how others may reuse the code
 ├── architecture.md      ← System design & diagrams
 └── notes.md             ← This file
 ```
@@ -134,9 +353,11 @@ rag_telecom_chatbot/
 | Add or edit FAQs | `data/faq.csv`, then re-run `ingest_faq.py` |
 | Add past cases | `data/seed_tickets.py`, run it, then re-run `ingest_tickets.py` |
 | Change the manual | `data/generate_pdf.py`, run it, then re-run `ingest_pdf.py` |
-| Change how many results are searched | `retriever.py` → `k_faq`, `k_tickets`, `k_guides` |
+| Change how many results are searched | `config.py` → `K_FAQ`, `K_TICKETS`, `K_GUIDES` |
+| Change the PDF chunk size / overlap | `config.py` → `CHUNK_SIZE`, `CHUNK_OVERLAP`, then re-run `ingest_pdf.py` |
+| Change the embedding model | `config.py` → `EMBED_MODEL`, then re-run **all three** ingest scripts |
 | Change the website's look / sample questions | `app.py` |
-| Change the AI model | `rag_chain.py` → `ChatGroq(model=...)` |
+| Change the AI model | `config.py` → `LLM_MODEL` |
 
 ---
 
@@ -209,7 +430,154 @@ python data/seed_tickets.py
 
 ---
 
-### 5.3 `ingest_faq.py` — teaches the bot the FAQs
+### 5.3 `config.py` — the settings file
+
+**In plain words:** One file that holds **every setting** the project uses: where files are, which AI models to use, how to chunk the PDF, how many search results to fetch. Every other script reads its settings from here.
+
+**Not run directly.** The ingest scripts, `retriever.py` and `rag_chain.py` all import from it.
+
+**Why it exists:** before `config.py`, the same settings were copy-pasted into several files. For example, the embedding model name was written in **4 places**. If someone changed it in one file and forgot another, the stored documents and the customer's questions would be turned into numbers by **different models**, and search would quietly return poor results with **no error message**. Now each setting is written **once**, so that mistake can't happen.
+
+**An analogy:** it's like a thermostat for a whole house instead of a separate dial in every room. Change the temperature once, and every room follows.
+
+#### Line-by-line walkthrough of `config.py`
+
+> Line numbers match [config.py](config.py).
+
+**Part 1: Description and import (lines 1–5)**
+
+```python
+"""
+Central settings for the whole project.
+Every script imports from here, so a value only ever needs changing in one place.
+"""
+from pathlib import Path
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 1–4 | Docstring | Says what the file is for. |
+| 5 | `from pathlib import Path` | Loads Python's built-in tool for working with **file and folder paths**. It handles `\` (Windows) vs `/` (Mac/Linux) automatically. |
+
+**Part 2: The project folder (lines 7–9)**
+
+```python
+# Project folder (where this file lives). All paths are built from it,
+# so the scripts work no matter which folder they are run from.
+BASE_DIR = Path(__file__).resolve().parent
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 7–8 | Comment | Explains why the line below matters. |
+| 9 | `BASE_DIR = Path(__file__).resolve().parent` | Works out the **full address of the project folder**. `__file__` is the location of this file (`config.py`), `.resolve()` turns it into a complete address like `C:\Users\…\rag_telecom_chatbot\config.py`, and `.parent` steps up to the folder that contains it. |
+
+**Why this matters:** previously the scripts used short paths like `"data/faq.csv"`, which Python looks for **relative to wherever you ran the command from**. Running `python rag_telecom_chatbot/ingest_faq.py` from the parent folder would fail to find the data, or create a new, empty `chroma_store/` in the wrong place. Building every path from `BASE_DIR` means the scripts always find the right files, wherever they're started from.
+
+**Part 3: Data sources (lines 12–15)**
+
+```python
+DATA_DIR        = BASE_DIR / "data"
+FAQ_CSV_PATH    = DATA_DIR / "faq.csv"
+TICKETS_DB_PATH = DATA_DIR / "tickets.db"
+GUIDE_PDF_PATH  = DATA_DIR / "telecom_guide.pdf"
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 12 | `DATA_DIR` | The `data/` folder. With `Path`, the `/` symbol **joins** folder names (it isn't division). |
+| 13 | `FAQ_CSV_PATH` | Full path to the FAQ spreadsheet. Used by `ingest_faq.py`. |
+| 14 | `TICKETS_DB_PATH` | Full path to the ticket database. Used by `ingest_tickets.py`. |
+| 15 | `GUIDE_PDF_PATH` | Full path to the PDF manual. Used by `ingest_pdf.py`. |
+
+The lines starting with `# ──` are just comments drawn as section dividers, to make the file easy to scan.
+
+**Part 4: Vector store (lines 18–21)**
+
+```python
+CHROMA_DIR         = str(BASE_DIR / "chroma_store")
+FAQ_COLLECTION     = "faq"
+TICKETS_COLLECTION = "tickets"
+GUIDES_COLLECTION  = "guides"
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 18 | `CHROMA_DIR` | Full path to the `chroma_store/` database folder. Wrapped in `str(...)` because ChromaDB expects the path as plain text. |
+| 19–21 | `FAQ_COLLECTION`, `TICKETS_COLLECTION`, `GUIDES_COLLECTION` | The three collection names. Each ingest script **writes** to one; `retriever.py` **reads** all three. Defining them here guarantees writer and reader use the same names. |
+
+**Part 5: Embedding model (line 24)**
+
+```python
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 24 | `EMBED_MODEL` | The model that turns text into 384 numbers. **The most important setting to keep in one place**, because ingestion and search must use the same one. ⚠️ If you change it, re-run all three ingest scripts so the stored vectors are rebuilt with the new model. |
+
+**Part 6: PDF chunking (lines 27–28)**
+
+```python
+CHUNK_SIZE    = 600
+CHUNK_OVERLAP = 100
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 27 | `CHUNK_SIZE` | Maximum characters per PDF chunk. |
+| 28 | `CHUNK_OVERLAP` | Characters shared between neighbouring chunks. Change either, then re-run `python ingest_pdf.py`. See [Common questions about chunking](#common-questions-about-chunking). |
+
+**Part 7: Retrieval (lines 31–33)**
+
+```python
+K_FAQ     = 3
+K_TICKETS = 3
+K_GUIDES  = 3
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 31–33 | `K_FAQ`, `K_TICKETS`, `K_GUIDES` | How many results to fetch from each collection per question (3 + 3 + 3 = 9). Used as the defaults in `build_retriever()`. No re-ingest needed; just restart the app. |
+
+**Part 8: The AI model (lines 36–37)**
+
+```python
+LLM_MODEL       = "qwen/qwen3.8-27b"
+LLM_TEMPERATURE = 0
+```
+
+| Line | Setting | What it does |
+|---|---|---|
+| 36 | `LLM_MODEL` | Which AI model Groq runs to write the answers. |
+| 37 | `LLM_TEMPERATURE` | The "randomness dial": 0 = consistent, factual answers. |
+
+#### Which script uses which setting
+
+| Setting | `ingest_faq.py` | `ingest_tickets.py` | `ingest_pdf.py` | `retriever.py` | `rag_chain.py` |
+|---|---|---|---|---|---|
+| `CHROMA_DIR` | ✅ | ✅ | ✅ | ✅ | |
+| `EMBED_MODEL` | ✅ | ✅ | ✅ | ✅ | |
+| `FAQ_COLLECTION` / `FAQ_CSV_PATH` | ✅ | | | ✅ (collection) | |
+| `TICKETS_COLLECTION` / `TICKETS_DB_PATH` | | ✅ | | ✅ (collection) | |
+| `GUIDES_COLLECTION` / `GUIDE_PDF_PATH` | | | ✅ | ✅ (collection) | |
+| `CHUNK_SIZE`, `CHUNK_OVERLAP` | | | ✅ | | |
+| `K_FAQ`, `K_TICKETS`, `K_GUIDES` | | | | ✅ | |
+| `LLM_MODEL`, `LLM_TEMPERATURE` | | | | | ✅ |
+
+#### After changing a setting, what do I need to re-run?
+
+| You changed… | Then… |
+|---|---|
+| `EMBED_MODEL` | Re-run **all three** ingest scripts, then restart the app |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | Re-run `python ingest_pdf.py`, then restart the app |
+| A data path or collection name | Re-run the matching ingest script, then restart the app |
+| `K_FAQ` / `K_TICKETS` / `K_GUIDES` | Just restart the app |
+| `LLM_MODEL` / `LLM_TEMPERATURE` | Just restart the app |
+
+---
+
+### 5.4 `ingest_faq.py` — teaches the bot the FAQs
 
 **In plain words:** Reads the FAQ spreadsheet, turns each question-and-answer into "meaning numbers" (embeddings), and saves them in the `faq` collection of the vector database.
 
@@ -227,8 +595,9 @@ python ingest_faq.py
    ```
    plus labels (metadata): `source="faq"`, `category`, `faq_id`.
 3. **Load the embedding model** `all-MiniLM-L6-v2` (downloaded automatically the first time).
-4. **Embed and save** all documents into ChromaDB collection `faq` inside `chroma_store/`.
-5. Prints how many vectors are stored.
+4. **Empty the collection** `faq` if it already has data, so running the script again **replaces** the FAQs instead of adding a second copy.
+5. **Embed and save** all documents into ChromaDB collection `faq` inside `chroma_store/`.
+6. Prints how many vectors are stored.
 
 **Design note:** FAQs are **not** cut into smaller pieces — each Q&A is already short and complete.
 
@@ -237,13 +606,175 @@ python ingest_faq.py
 Loading FAQ documents...
   25 FAQ entries loaded.
 Initialising embedding model...
+  Removing 25 existing vectors...        ← only appears when re-running
 Embedding and storing in Chroma collection 'faq'...
   Done. 25 vectors stored.
 ```
 
+#### Line-by-line walkthrough of `ingest_faq.py`
+
+> Line numbers match [ingest_faq.py](ingest_faq.py). The other two ingest scripts follow the **same structure**, so reading this one carefully makes the next two easy.
+
+**Part 1: Description (lines 1–5)**
+
+```python
+"""
+Ingests data/faq.csv into the 'faq' Chroma collection.
+Safe to re-run: it replaces the collection each time.
+Run whenever the CSV changes: python ingest_faq.py
+"""
+```
+
+| Line | What it does |
+|---|---|
+| 1–5 | A **docstring**: a note for humans at the top of the file saying what the script does and how to run it. Python ignores it when running. |
+
+**Part 2: Imports, the tools this script borrows (lines 6–11)**
+
+```python
+import os
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import pandas as pd
+from langchain_core.documents import Document
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 6 | `import os` | Loads Python's built-in "operating system" toolkit, used for file paths and settings. |
+| 7 | `os.environ["TRANSFORMERS_VERBOSITY"] = "error"` | Tells the AI-model library to **only print real errors**, not dozens of info/warning lines. It's set *before* the libraries below are loaded so they pick it up. Purely cosmetic: it keeps the output clean. |
+| 8 | `import pandas as pd` | Loads **pandas**, a library for reading spreadsheet-like data (CSV files). `as pd` is just a short nickname. |
+| 9 | `from langchain_core.documents import Document` | Loads LangChain's **Document** type: a standard "box" holding a piece of text (`page_content`) plus labels about it (`metadata`). |
+| 10 | `from langchain_chroma import Chroma` | Loads the connector to the **ChromaDB** vector database. |
+| 11 | `from langchain_huggingface import HuggingFaceEmbeddings` | Loads the tool that runs the **embedding model** (turns text into 384 numbers). |
+
+**Part 3: Settings, borrowed from `config.py` (line 13)**
+
+```python
+from config import CHROMA_DIR, EMBED_MODEL, FAQ_COLLECTION, FAQ_CSV_PATH
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 13 | `from config import …` | Brings in four settings from the project's central settings file, [config.py](config.py) (see [section 5.3](#53-configpy--the-settings-file)): |
+| | `CHROMA_DIR` | The folder where the vector database is saved (`chroma_store/`). |
+| | `EMBED_MODEL` | Which embedding model to use. Because every script imports it from the **same place**, ingestion and search can never accidentally use different models. |
+| | `FAQ_COLLECTION` | The name of the collection to fill: `"faq"`. |
+| | `FAQ_CSV_PATH` | The full path to `data/faq.csv`. |
+
+Names in CAPITALS are a Python convention meaning "this is a setting; it doesn't change while the program runs". The blank line before this import separates outside libraries (lines 8–11) from the project's own files.
+
+**Part 4: Reading the CSV into Documents (lines 16–25)**
+
+```python
+def load_faq_documents(csv_path) -> list[Document]:
+    df = pd.read_csv(csv_path)
+    docs = []
+    for _, row in df.iterrows():
+        content = f"Q: {row['question']}\nA: {row['answer']}"
+        docs.append(Document(
+            page_content=content,
+            metadata={"source": "faq", "category": row["category"], "faq_id": str(row["id"])},
+        ))
+    return docs
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 16 | `def load_faq_documents(csv_path) -> list[Document]:` | Defines a reusable **function**. It takes a file path and gives back a list of Documents. The `-> list[Document]` part is a **type hint**: a note for readers and code editors about what comes back, not a rule Python enforces. |
+| 17 | `df = pd.read_csv(csv_path)` | Reads the whole CSV into a **DataFrame** (`df`), basically a spreadsheet in memory with columns `id`, `question`, `answer`, `category`. |
+| 18 | `docs = []` | Creates an empty list to collect the Documents. |
+| 19 | `for _, row in df.iterrows():` | Loops over the spreadsheet **one row at a time**. `iterrows()` gives (row number, row); the `_` means "I don't need the row number". |
+| 20 | `content = f"Q: {row['question']}\nA: {row['answer']}"` | Builds the text that will be embedded and searched. The `f"..."` (f-string) inserts values into `{ }`; `\n` is a line break. Result: `Q: How do I check my data balance?` / `A: Dial *123#…` |
+| 21–24 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
+| 22 | `page_content=content` | The text itself: what gets embedded and later shown to the AI. |
+| 23 | `metadata={...}` | Labels stored alongside (not embedded): `source: "faq"` (used later to print `[FAQ]` in the prompt), the row's `category` (e.g. `"data"`), and `faq_id` (the row's ID, converted to text with `str()` because Chroma metadata must be simple text/number values). |
+| 25 | `return docs` | Hands the finished list (25 Documents) back to whoever called the function. |
+
+**Part 5: The main program (lines 28–50)**
+
+```python
+def main():
+    print("Loading FAQ documents...")
+    docs = load_faq_documents(FAQ_CSV_PATH)
+    print(f"  {len(docs)} FAQ entries loaded.")
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 28 | `def main():` | Defines the main function: the script's to-do list, in order. |
+| 29 | `print("Loading FAQ documents...")` | Progress message. |
+| 30 | `docs = load_faq_documents(FAQ_CSV_PATH)` | Calls the function above. `docs` now holds 25 Documents. |
+| 31 | `print(f"  {len(docs)} FAQ entries loaded.")` | `len(docs)` counts the items → prints `25 FAQ entries loaded.` |
+
+```python
+    print("Initialising embedding model...")
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 33 | `print(...)` | Progress message. |
+| 34 | `embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)` | Loads the MiniLM embedding model. The first time ever, it **downloads** it (~88 MB) from Hugging Face; after that it loads from your computer's cache. Nothing is embedded yet; this just gets the tool ready. |
+
+```python
+    vectorstore = Chroma(
+        collection_name=FAQ_COLLECTION,
+        embedding_function=embeddings,
+        persist_directory=CHROMA_DIR,
+    )
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 36–40 | `vectorstore = Chroma(...)` | **Opens** the `faq` collection in `chroma_store/`. If the folder or collection doesn't exist yet, Chroma **creates** it. |
+| 37 | `collection_name=FAQ_COLLECTION` | Which collection: `"faq"`. |
+| 38 | `embedding_function=embeddings` | Tells Chroma which model to use whenever it needs to turn text into vectors. |
+| 39 | `persist_directory=CHROMA_DIR` | Save to disk in `chroma_store/` (so the data survives after the script ends). |
+
+```python
+    # Empty the collection first so re-running replaces the data instead of duplicating it
+    existing_ids = vectorstore.get()["ids"]
+    if existing_ids:
+        print(f"  Removing {len(existing_ids)} existing vectors...")
+        vectorstore.delete(ids=existing_ids)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 42 | `# Empty the collection…` | A **comment** (starts with `#`): a note for humans, ignored by Python. |
+| 43 | `existing_ids = vectorstore.get()["ids"]` | Asks Chroma for everything already in the collection and keeps only the list of **IDs** (every stored item has a unique ID). On a first run this list is empty. |
+| 44 | `if existing_ids:` | "If the list is not empty…" (an empty list counts as *false* in Python). |
+| 45 | `print(f"  Removing … existing vectors...")` | Says how many old items will be removed. |
+| 46 | `vectorstore.delete(ids=existing_ids)` | **Deletes** all old items. This is what prevents duplicates when the script runs again. |
+
+```python
+    print(f"Embedding and storing in Chroma collection '{FAQ_COLLECTION}'...")
+    vectorstore.add_documents(docs)
+    print(f"  Done. {vectorstore._collection.count()} vectors stored.")
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 48 | `print(...)` | Progress message. |
+| 49 | `vectorstore.add_documents(docs)` | **The key step.** For each of the 25 Documents, Chroma (1) runs the embedding model to turn the text into 384 numbers, (2) gives it a new random ID, and (3) saves the vector, text and metadata to disk. |
+| 50 | `vectorstore._collection.count()` | Counts what's now in the collection, as a final check. Should print `25`. (The `_` at the start of `_collection` marks it as an "internal" part of the library; it works, but it isn't an official feature.) |
+
+**Part 6: The start button (lines 53–54)**
+
+```python
+if __name__ == "__main__":
+    main()
+```
+
+| Line | What it does |
+|---|---|
+| 53–54 | "If this file was **run directly** (`python ingest_faq.py`), call `main()`." If another file only *imports* this one (to reuse `load_faq_documents`, for example), `main()` does **not** run automatically. This is a standard Python pattern. |
+
 ---
 
-### 5.4 `ingest_tickets.py` — teaches the bot past cases
+### 5.5 `ingest_tickets.py` — teaches the bot past cases
 
 **In plain words:** Opens the tickets database, takes only the cases that were **successfully solved**, and saves them to the `tickets` collection.
 
@@ -261,15 +792,128 @@ python ingest_tickets.py
    Resolution: Investigated and found the roaming bundle was activated 3 hours after…
    ```
    plus metadata: `source="ticket"`, `ticket_id`, `category`, `status`.
-3. **Embed and save** to the `tickets` collection.
+3. **Empty** the `tickets` collection if it already has data (so re-running replaces rather than duplicates).
+4. **Embed and save** to the `tickets` collection.
 
 **Design note:** The problem and its solution are kept in **one** document so that when a customer describes a similar problem, the bot also sees how it was solved.
 
+#### Line-by-line walkthrough of `ingest_tickets.py`
+
+> Line numbers match [ingest_tickets.py](ingest_tickets.py). This script has the same shape as `ingest_faq.py`. The **new** parts are reading from a SQLite database (lines 8 and 16–22) and building a three-part text (lines 27–31).
+
+**Part 1: Description (lines 1–5)**
+
+| Line | What it does |
+|---|---|
+| 1–5 | Docstring: says this script loads **resolved** tickets from `data/tickets.db` into the `tickets` collection, and is safe to re-run. |
+
+**Part 2: Imports (lines 6–11)**
+
+```python
+import os
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite3
+from langchain_core.documents import Document
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 6–7 | `import os` + verbosity setting | Same as the FAQ script: file-path tools, and quieter library output. |
+| 8 | `import sqlite3` | **New.** Python's built-in tool for reading **SQLite** database files (`.db`). No installation needed; it comes with Python. |
+| 9–11 | `Document`, `Chroma`, `HuggingFaceEmbeddings` | Same as the FAQ script. |
+
+**Part 3: Settings, borrowed from `config.py` (line 13)**
+
+```python
+from config import CHROMA_DIR, EMBED_MODEL, TICKETS_COLLECTION, TICKETS_DB_PATH
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 13 | `from config import …` | Same idea as the FAQ script: four settings from [config.py](config.py). |
+| | `CHROMA_DIR`, `EMBED_MODEL` | The same database folder and the same embedding model as every other script. |
+| | `TICKETS_COLLECTION` | Fill the `tickets` collection this time. |
+| | `TICKETS_DB_PATH` | The full path to `data/tickets.db`. |
+
+**Part 4: Reading tickets from the database (lines 16–22)**
+
+```python
+def load_ticket_documents(db_path) -> list[Document]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM tickets WHERE status = 'resolved'"
+    ).fetchall()
+    conn.close()
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 16 | `def load_ticket_documents(db_path) -> list[Document]:` | Defines a function that takes the database path and returns a list of Documents. |
+| 17 | `conn = sqlite3.connect(db_path)` | **Opens a connection** to the database file, like opening a spreadsheet file before reading it. |
+| 18 | `conn.row_factory = sqlite3.Row` | Makes each result row readable **by column name** (`row['description']`) instead of only by position (`row[4]`). Easier to read and less error-prone. |
+| 19–21 | `rows = conn.execute("SELECT …").fetchall()` | Runs a **SQL query**, a question asked to the database: *"give me every column (`*`) from the `tickets` table, but only rows where status is `resolved`."* `fetchall()` collects all the matching rows into a list. Result: 19 rows (the 1 `escalated` ticket is skipped because it has no confirmed fix to recommend). |
+| 22 | `conn.close()` | **Closes** the database connection. Good practice: it frees the file as soon as we're done with it. |
+
+**Part 5: Turning each ticket into a Document (lines 24–41)**
+
+```python
+    docs = []
+    for row in rows:
+        # Combine issue description + resolution into a single searchable text block
+        content = (
+            f"Issue: {row['issue_type']}\n"
+            f"Description: {row['description']}\n"
+            f"Resolution: {row['resolution']}"
+        )
+        docs.append(Document(
+            page_content=content,
+            metadata={
+                "source":    "ticket",
+                "ticket_id": row["ticket_id"],
+                "category":  row["category"],
+                "status":    row["status"],
+            },
+        ))
+    return docs
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 24 | `docs = []` | Empty list to collect Documents. |
+| 25 | `for row in rows:` | Go through the tickets one at a time. |
+| 26 | `# Combine …` | Comment explaining the next step. |
+| 27–31 | `content = ( f"Issue: …\n" f"Description: …\n" f"Resolution: …" )` | Builds **one text block** from three columns. Python automatically joins strings written next to each other inside `( )`. Result:<br>`Issue: Unexpected roaming charges`<br>`Description: Customer returned from a trip to Spain…`<br>`Resolution: …bundle was activated 3 hours after…`<br>Keeping the problem **and** its fix together is the whole point: a customer describing the problem will also bring back the solution. |
+| 32–40 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
+| 33 | `page_content=content` | The text to embed and search. |
+| 34–39 | `metadata={...}` | Labels: `source: "ticket"` (shows as `[TICKET]` in the AI's prompt), `ticket_id` (e.g. `TK-004`), `category` (e.g. `roaming`), and `status` (always `resolved` here). Notice `ticket_id`, `category` and `status` are **not** in the searchable text; they're kept only as labels. |
+| 41 | `return docs` | Returns 19 Documents. |
+
+**Part 6: Main program (lines 44–66)**
+
+This is **identical** to the FAQ script's main program; only the messages and the variable names differ:
+
+| Lines | What happens | Same as FAQ lines |
+|---|---|---|
+| 45–47 | Print progress, call `load_ticket_documents(TICKETS_DB_PATH)`, print `19 resolved tickets loaded.` | 29–31 |
+| 49–50 | Load the embedding model | 33–34 |
+| 52–56 | Open (or create) the `tickets` collection in `chroma_store/` | 36–40 |
+| 58–62 | Delete any existing tickets in the collection, so a re-run never duplicates | 42–46 |
+| 64–66 | Embed and save all 19 tickets, then print the final count | 48–50 |
+
+**Part 7: Start button (lines 69–70)**
+
+| Lines | What it does |
+|---|---|
+| 69–70 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
+
 ---
 
-### 5.5 `ingest_pdf.py` — teaches the bot the manual
+### 5.6 `ingest_pdf.py` — teaches the bot the manual
 
-**In plain words:** Reads the PDF manual, cuts it into small overlapping paragraphs, and saves each paragraph to the `guides` collection.
+**In plain words:** Reads the PDF manual, removes the repeated text printed on every page (header and page number), cuts it into small overlapping paragraphs, and saves each paragraph to the `guides` collection.
 
 ```bash
 python ingest_pdf.py
@@ -278,20 +922,223 @@ python ingest_pdf.py
 **What it does, step by step**
 
 1. **Load** the PDF page by page with `PyPDFLoader`.
-2. **Chunk** the pages with `RecursiveCharacterTextSplitter`:
+2. **Clean** each page: remove the header line *"Telecom Technical Reference Guide - Internal Use Only"* and the footer *"Page 2"*, *"Page 3"*… These appear on every page and carry no meaning, so leaving them in would add noise to the chunks.
+3. **Chunk** the pages with `RecursiveCharacterTextSplitter`:
    - `CHUNK_SIZE = 600` characters (roughly one paragraph)
    - `CHUNK_OVERLAP = 100` characters shared between neighbouring chunks
-   - Tries to split at paragraph breaks first, then line breaks, then sentence ends, then spaces — so it avoids cutting words or sentences in half.
-3. **Tag** each chunk with `source="guide"` and a `chunk_index` number.
-4. **Embed and save** to the `guides` collection.
+   - Tries to split at paragraph breaks first, then line breaks, then sentence ends, then spaces, so it avoids cutting words or sentences in half.
+4. **Tag** each chunk with `source="guide"` and a `chunk_index` number.
+5. **Empty** the `guides` collection if it already has data (so re-running replaces rather than duplicates).
+6. **Embed and save** to the `guides` collection: 36 chunks from 9 pages.
 
-**Why chunk?** A whole page covers many topics. If the customer asks about APN settings, we want the *one paragraph* about APNs — not a full page where APNs are one line among many.
+**Why chunk?** A whole page covers many topics. If the customer asks about APN settings, we want the *one paragraph* about APNs, not a full page where APNs are one line among many.
 
 **Why overlap?** If an important sentence sits on the border between two chunks, the overlap makes sure it appears whole in at least one of them.
 
+**Why clean first?** Before cleaning was added, 9 of the 37 chunks contained the header or a "Page N" footer. Those words have nothing to do with the chunk's topic, so they slightly blurred its "meaning numbers". After cleaning, 0 chunks contain them (and there's one chunk fewer: 36).
+
+**Expected output**
+```
+Loading PDF...
+  9 pages loaded.
+Removing page headers and footers...
+Chunking (size=600, overlap=100)...
+  36 chunks produced.
+Initialising embedding model...
+  Removing 36 existing vectors...        ← only appears when re-running
+Embedding and storing in Chroma collection 'guides'...
+  Done. 36 vectors stored.
+```
+
+#### Line-by-line walkthrough of `ingest_pdf.py`
+
+> Line numbers match [ingest_pdf.py](ingest_pdf.py). Unlike the other two scripts, this one has **no separate loading function**: everything happens inside `main()`. The **new** parts are the cleaning rules (lines 21–31), loading the PDF (lines 36–37), cleaning each page (lines 40–42), **chunking** (lines 44–50) and tagging the chunks (lines 52–55).
+
+**Part 1: Description (lines 1–7)**
+
+| Line | What it does |
+|---|---|
+| 1–7 | Docstring: loads `data/telecom_guide.pdf` into the `guides` collection, removes the repeated header/footer, splits it into chunks with `RecursiveCharacterTextSplitter`, and is safe to re-run. |
+
+**Part 2: Imports (lines 8–19)**
+
+```python
+import os
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import re
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+
+from config import (
+    CHROMA_DIR, EMBED_MODEL, GUIDES_COLLECTION, GUIDE_PDF_PATH, CHUNK_SIZE, CHUNK_OVERLAP,
+)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 8–9 | `import os` + verbosity setting | Same as the other scripts. |
+| 10 | `import re` | **New.** Python's built-in **regular expressions** tool, for finding text that follows a pattern (like "the word Page, a space, then any number"). Used to spot the header and footer lines. |
+| 12 | `from langchain_community.document_loaders import PyPDFLoader` | **New.** A ready-made tool that opens a PDF and pulls out its text, **one Document per page**. (It uses the `pypdf` library underneath.) |
+| 13 | `from langchain_text_splitters import RecursiveCharacterTextSplitter` | **New.** The **chunking** tool: it cuts long text into smaller pieces at sensible places. |
+| 14–15 | `Chroma`, `HuggingFaceEmbeddings` | Same as the other scripts. Note `Document` isn't imported here: the PDF loader creates Documents itself. |
+| 17–19 | `from config import ( … )` | Six settings from [config.py](config.py): the database folder, the embedding model, the `guides` collection name, the PDF's path, and the two **chunking settings** `CHUNK_SIZE` (600) and `CHUNK_OVERLAP` (100). The brackets `( )` simply let one import statement continue over several lines. |
+
+**Part 3: The cleaning rules (lines 21–23)**
+
+```python
+# Text printed on every page by data/generate_pdf.py; it carries no meaning, so it is removed
+HEADER_PATTERN = re.compile(r"^Telecom Technical Reference Guide\s+-\s+Internal Use Only$")
+FOOTER_PATTERN = re.compile(r"^Page \d+$")
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 21 | `# Text printed on every page…` | Comment explaining why these patterns exist. |
+| 22 | `HEADER_PATTERN = re.compile(r"…")` | A pattern that matches **exactly** the header line. `re.compile` prepares the pattern once so it can be reused quickly. Pattern symbols: `^` = start of the line, `$` = end of the line (so only a line that is *nothing but* the header matches), `\s+` = one or more spaces (the PDF has two spaces before the dash, so this makes it tolerant). The `r` before the quotes means "raw text": backslashes are kept as they are. |
+| 23 | `FOOTER_PATTERN = re.compile(r"^Page \d+$")` | Matches lines like `Page 2` or `Page 10`. `\d+` = one or more digits. Because of `^` and `$`, a sentence that merely *contains* "page 2" is **not** removed, only a line that is exactly "Page" + a number. |
+
+**Part 4: The cleaning function (lines 26–31)**
+
+```python
+def clean_page_text(text: str) -> str:
+    lines = [
+        line for line in text.splitlines()
+        if not HEADER_PATTERN.match(line.strip()) and not FOOTER_PATTERN.match(line.strip())
+    ]
+    return "\n".join(lines).strip()
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 26 | `def clean_page_text(text: str) -> str:` | A function that takes one page's text and returns the cleaned text. |
+| 27–30 | `lines = [ … ]` | A **list comprehension**: a compact way to build a list by filtering another one. Read it as: *"for every line in the page, keep it **if** it's not the header **and** not a footer."* |
+| 28 | `line for line in text.splitlines()` | `splitlines()` cuts the page into individual lines. |
+| 29 | `if not HEADER_PATTERN.match(line.strip()) and not FOOTER_PATTERN.match(line.strip())` | The filter. `.strip()` removes spaces at the start and end of the line before checking, so stray spaces don't stop a match. |
+| 31 | `return "\n".join(lines).strip()` | Glues the kept lines back together with line breaks (blank lines between paragraphs are kept, so the chunker can still split at paragraph ends), and trims empty space at the very start and end. |
+
+**Example:** the second page of the PDF, before and after cleaning:
+
+```
+BEFORE                                                AFTER
+Telecom Technical Reference Guide  - Internal Use Only    1. Introduction to Mobile Networks
+1. Introduction to Mobile Networks                        Mobile networks have evolved through…
+Mobile networks have evolved through…                     …
+…                                                         bands to balance coverage and capacity.
+bands to balance coverage and capacity.
+Page 2
+```
+
+**Part 5: Loading the PDF (lines 34–38)**
+
+```python
+def main():
+    print("Loading PDF...")
+    loader = PyPDFLoader(str(GUIDE_PDF_PATH))
+    pages = loader.load()
+    print(f"  {len(pages)} pages loaded.")
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 34 | `def main():` | Start of the main program. |
+| 35 | `print(...)` | Progress message. |
+| 36 | `loader = PyPDFLoader(str(GUIDE_PDF_PATH))` | Prepares a loader pointed at the PDF. Nothing is read yet. `str(...)` converts the path from `config.py` (a `Path` object) into plain text, which is what this loader expects. |
+| 37 | `pages = loader.load()` | **Reads the PDF.** Returns a list of 9 Documents, **one per page**. Each one's `page_content` is that page's text, and its `metadata` is filled in automatically, e.g. `{'source': '…/data/telecom_guide.pdf', 'page': 1, 'page_label': '2', 'total_pages': 9, 'producer': 'PyPDF', …}`. Note `page` counts from **0**, so the title page is `page: 0`. |
+| 38 | `print(f"  {len(pages)} pages loaded.")` | Prints `9 pages loaded.` |
+
+**Part 6: Cleaning each page (lines 40–42)**
+
+```python
+    print("Removing page headers and footers...")
+    for page in pages:
+        page.page_content = clean_page_text(page.page_content)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 40 | `print(...)` | Progress message. |
+| 41 | `for page in pages:` | Go through the 9 pages one by one. |
+| 42 | `page.page_content = clean_page_text(page.page_content)` | Replaces each page's text with its cleaned version. The page's metadata (page number etc.) is untouched. This happens **before** chunking, so no chunk ever contains the header or footer. |
+
+**Part 7: Chunking (lines 44–50)**
+
+```python
+    print(f"Chunking (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ".", " "],
+    )
+    chunks = splitter.split_documents(pages)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 44 | `print(...)` | Prints `Chunking (size=600, overlap=100)...` |
+| 45–49 | `splitter = RecursiveCharacterTextSplitter(...)` | Creates the chunking tool with our rules. Nothing is cut yet. |
+| 46 | `chunk_size=CHUNK_SIZE` | Each chunk at most 600 characters. |
+| 47 | `chunk_overlap=CHUNK_OVERLAP` | Up to 100 characters of overlap. |
+| 48 | `separators=["\n\n", "\n", ".", " "]` | **Where it's allowed to cut, in order of preference:** a blank line (end of paragraph), then a line break, then a full stop, then a space. "Recursive" means: try the first; if a piece is still too long, try the next one on that piece, and so on. |
+| 50 | `chunks = splitter.split_documents(pages)` | **Does the cutting.** Each page is split separately, so a chunk never crosses two pages. Each chunk **inherits** its page's metadata (`page`, `source`, …). Result: 36 chunks from 9 pages. |
+
+**Part 8: Labelling the chunks (lines 52–57)**
+
+```python
+    # Tag each chunk so we know it came from the guide
+    for i, chunk in enumerate(chunks):
+        chunk.metadata["source"] = "guide"
+        chunk.metadata["chunk_index"] = i
+
+    print(f"  {len(chunks)} chunks produced.")
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 52 | `# Tag each chunk…` | Comment. |
+| 53 | `for i, chunk in enumerate(chunks):` | Loops over the chunks. `enumerate` also gives a running number `i` (0, 1, 2, …). |
+| 54 | `chunk.metadata["source"] = "guide"` | **Overwrites** the loader's `source` (which was the PDF's file path) with the simple label `"guide"`. This matches the other collections' style (`faq`, `ticket`) and is what shows as `[GUIDE]` in the AI's prompt. |
+| 55 | `chunk.metadata["chunk_index"] = i` | Gives each chunk its position number (0–35), so you can tell which chunks were neighbours in the original document. |
+| 57 | `print(...)` | Prints `36 chunks produced.` |
+
+**Part 9: Embedding and saving (lines 59–76)**
+
+Identical to the FAQ script's lines 33–50; only the collection name is `GUIDES_COLLECTION` and the list being saved is called `chunks` instead of `docs`:
+
+| Lines | What happens | Same as FAQ lines |
+|---|---|---|
+| 59–60 | Load the embedding model | 33–34 |
+| 62–66 | Open (or create) the `guides` collection in `chroma_store/` | 36–40 |
+| 68–72 | Delete any existing chunks in the collection, so a re-run never duplicates | 42–46 |
+| 74–76 | `vectorstore.add_documents(chunks)`: embed all 36 chunks into vectors and save them, then print the final count | 48–50 |
+
+**Part 10: Start button (lines 79–80)**
+
+| Lines | What it does |
+|---|---|
+| 79–80 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
+
+#### The three ingest scripts side by side
+
+| Step | `ingest_faq.py` | `ingest_tickets.py` | `ingest_pdf.py` |
+|---|---|---|---|
+| Settings from | `config.py` | `config.py` | `config.py` |
+| Read the source | `pd.read_csv` | `sqlite3` + SQL query | `PyPDFLoader` |
+| Filter | — (all rows) | Only `status = 'resolved'` | — (all pages) |
+| Clean | — | — | Remove page header + "Page N" footer |
+| Build text | `Q: … A: …` | `Issue: … Description: … Resolution: …` | Cleaned page text |
+| Chunking | None (1 row = 1 chunk) | None (1 ticket = 1 chunk) | Recursive, 600 / 100 |
+| `source` label | `faq` | `ticket` | `guide` |
+| Extra labels | `category`, `faq_id` | `ticket_id`, `category`, `status` | `chunk_index`, `page`, + PDF info |
+| Empty old data | ✅ | ✅ | ✅ |
+| Embed + save | `add_documents(docs)` | `add_documents(docs)` | `add_documents(chunks)` |
+| Final count | 25 | 19 | 36 |
+
 ---
 
-### 5.6 `retriever.py` — the librarian
+### 5.7 `retriever.py` — the librarian
 
 **In plain words:** Given a customer's question, it searches all three collections and returns the **3 best matches from each** — 9 snippets in total.
 
@@ -301,9 +1148,8 @@ python ingest_pdf.py
 
 | Item | Value / purpose |
 |---|---|
-| `CHROMA_DIR` | `"chroma_store"` — where the database lives |
-| `EMBED_MODEL` | `"sentence-transformers/all-MiniLM-L6-v2"` — **must match** the model used during ingestion, otherwise the "meaning numbers" won't be comparable |
-| `build_retriever(k_faq=3, k_tickets=3, k_guides=3)` | Main function |
+| `CHROMA_DIR`, `EMBED_MODEL`, collection names, `K_*` | Imported from [config.py](config.py). Because the ingest scripts import the same values, the model and folder **always match** what was used during ingestion |
+| `build_retriever(k_faq=3, k_tickets=3, k_guides=3)` | Main function (defaults come from `K_FAQ`, `K_TICKETS`, `K_GUIDES`) |
 
 **What `build_retriever()` does**
 
@@ -315,9 +1161,186 @@ python ingest_pdf.py
 
 **Why three separate searches instead of one big one?** The PDF produces many chunks. In one combined search, those chunks could push FAQs and tickets out of the top results. Searching each separately guarantees the AI always sees a policy answer (FAQ), a real-world fix (ticket), and technical background (guide).
 
+#### Line-by-line walkthrough of `retriever.py`
+
+> Line numbers match [retriever.py](retriever.py). The ingest scripts **write** to the database; this file **reads** from it. It reuses many of the same building blocks (`Chroma`, `HuggingFaceEmbeddings`), so the [ingest_faq.py walkthrough](#line-by-line-walkthrough-of-ingest_faqpy) is helpful background.
+
+**Part 1: Description (lines 1–6)**
+
+```python
+"""
+Builds a merged retriever across all three Chroma collections:
+  - faq     : FAQ entries (no chunking — 1 row = 1 doc)
+  - tickets : resolved support tickets (no chunking — 1 ticket = 1 doc)
+  - guides  : PDF guide chunks (RecursiveCharacterTextSplitter applied at ingest)
+"""
+```
+
+| Line | What it does |
+|---|---|
+| 1–6 | Docstring: says this file builds **one combined search** across the three collections, and reminds the reader how each collection was chunked. |
+
+**Part 2: Imports (lines 7–10)**
+
+```python
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.runnables import RunnableLambda
+from langchain_core.documents import Document
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 7 | `from langchain_chroma import Chroma` | Connector to the ChromaDB vector database. |
+| 8 | `from langchain_huggingface import HuggingFaceEmbeddings` | The embedding model tool. It's needed here too, because the **customer's question** must be turned into 384 numbers before it can be compared with the stored vectors. |
+| 9 | `from langchain_core.runnables import RunnableLambda` | **New.** A wrapper that turns an ordinary Python function into a LangChain "**Runnable**": a building block that can be chained with others using the `\|` symbol in [rag_chain.py](rag_chain.py). |
+| 10 | `from langchain_core.documents import Document` | The Document type. Here it's used only in a type hint (line 46), to say the function returns a list of Documents. |
+
+Notice this file does **not** set `TRANSFORMERS_VERBOSITY`. It doesn't need to, because `app.py` and `main.py` set it before importing this file.
+
+**Part 3: Settings, borrowed from `config.py` (lines 12–16)**
+
+```python
+from config import (
+    CHROMA_DIR, EMBED_MODEL,
+    FAQ_COLLECTION, TICKETS_COLLECTION, GUIDES_COLLECTION,
+    K_FAQ, K_TICKETS, K_GUIDES,
+)
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 12–16 | `from config import ( … )` | Brings in eight settings from [config.py](config.py). The brackets let the import continue over several lines. |
+| 13 | `CHROMA_DIR`, `EMBED_MODEL` | Where to find the database, and which embedding model to use for questions. Both come from the **same place** the ingest scripts use, so the folder is always the one they wrote to, and the model always matches. (If the models differed, the question's numbers and the stored numbers wouldn't be comparable, and search would quietly return poor results with **no error message**. Keeping it in `config.py` prevents that.) |
+| 14 | `FAQ_COLLECTION`, `TICKETS_COLLECTION`, `GUIDES_COLLECTION` | The three collection names: `"faq"`, `"tickets"`, `"guides"`. |
+| 15 | `K_FAQ`, `K_TICKETS`, `K_GUIDES` | How many results to fetch from each collection (3 each). |
+
+**Part 4: The function header and its settings (lines 19–23)**
+
+```python
+def build_retriever(
+    k_faq: int = K_FAQ,
+    k_tickets: int = K_TICKETS,
+    k_guides: int = K_GUIDES,
+) -> RunnableLambda:
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 19 | `def build_retriever(` | Defines the main function. It doesn't search anything itself; it **builds and returns** a search tool. |
+| 20 | `k_faq: int = K_FAQ` | How many FAQ results to return per question. `= K_FAQ` sets the **default value** (3, from `config.py`): used unless the caller asks for a different number, e.g. `build_retriever(k_faq=5)`. |
+| 21 | `k_tickets: int = K_TICKETS` | How many ticket results (default 3). |
+| 22 | `k_guides: int = K_GUIDES` | How many PDF-chunk results (default 3). |
+| 23 | `) -> RunnableLambda:` | Type hint: the function returns a `RunnableLambda` (a pluggable search block). |
+
+**Part 5: Load the embedding model (line 24)**
+
+```python
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+```
+
+| Line | What it does |
+|---|---|
+| 24 | Loads the MiniLM model from your computer's cache. It's loaded **once** and shared by all three collections below, which saves memory and time. |
+
+**Part 6: Open the three collections (lines 26–40)**
+
+```python
+    faq_store = Chroma(
+        collection_name=FAQ_COLLECTION,
+        embedding_function=embeddings,
+        persist_directory=CHROMA_DIR,
+    )
+    tickets_store = Chroma(collection_name=TICKETS_COLLECTION, ...)
+    guides_store  = Chroma(collection_name=GUIDES_COLLECTION, ...)
+```
+
+| Lines | Code | What it does |
+|---|---|---|
+| 26–30 | `faq_store = Chroma(collection_name=FAQ_COLLECTION, ...)` | Opens the `faq` collection. |
+| 31–35 | `tickets_store = Chroma(collection_name=TICKETS_COLLECTION, ...)` | Opens the `tickets` collection. |
+| 36–40 | `guides_store = Chroma(collection_name=GUIDES_COLLECTION, ...)` | Opens the `guides` collection. |
+| each | `embedding_function=embeddings` | Tells each collection to use the shared model to turn questions into vectors. |
+| each | `persist_directory=CHROMA_DIR` | Read from `chroma_store/` on disk. |
+
+⚠️ If you haven't run the ingest scripts yet, Chroma doesn't complain. It quietly **creates empty collections**, so every search returns nothing and the bot answers "I don't have enough information". That's why the ingest scripts must be run first.
+
+**Part 7: Turn each collection into a "retriever" (lines 42–44)**
+
+```python
+    faq_retriever     = faq_store.as_retriever(search_kwargs={"k": k_faq})
+    tickets_retriever = tickets_store.as_retriever(search_kwargs={"k": k_tickets})
+    guides_retriever  = guides_store.as_retriever(search_kwargs={"k": k_guides})
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 42 | `faq_store.as_retriever(search_kwargs={"k": k_faq})` | Wraps the FAQ collection in a **retriever**: a simple object with one job, *"give me a question, I'll give back the k most similar documents"*. `search_kwargs` passes search settings; here, `k = 3`. |
+| 43 | `tickets_retriever = ...` | Same for tickets. |
+| 44 | `guides_retriever = ...` | Same for PDF chunks. |
+
+The extra spaces before `=` on these lines are just to line them up neatly; Python ignores them.
+
+**How "most similar" is measured:** the search mode is **similarity** (the default). Chroma measures the **distance** between the question's vector and each stored vector: **smaller distance = closer meaning**. A real example for *"Why is my mobile internet so slow?"* in the `tickets` collection:
+
+| Rank | Distance | Ticket | Relevant? |
+|---|---|---|---|
+| 1 | 0.714 | TK-008 · Extremely slow 4G speeds (below 1 Mbps) | ✅ Very |
+| 2 | 1.112 | TK-001 · No internet access | ✅ Somewhat |
+| 3 | 1.331 | TK-018 · Number port taking too long | ❌ Not really |
+
+This shows an important limitation: **the retriever always returns exactly k results, even when some are weak matches.** There's no "only if it's similar enough" cut-off. The AI then has to ignore the irrelevant ones, which is one reason the prompt tells it to answer from the context *only when it's sufficient*.
+
+**Part 8: The search function itself (lines 46–51)**
+
+```python
+    def retrieve(query: str) -> list[Document]:
+        return (
+            faq_retriever.invoke(query)
+            + tickets_retriever.invoke(query)
+            + guides_retriever.invoke(query)
+        )
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 46 | `def retrieve(query: str) -> list[Document]:` | Defines the function that does the actual searching. It takes the customer's question (text) and returns a list of Documents. It's defined **inside** `build_retriever`, so it can use the three retrievers created above. (A function that remembers variables from the function around it is called a **closure**.) |
+| 47 | `return (` | Return the result of the expression in brackets. |
+| 48 | `faq_retriever.invoke(query)` | **Runs the FAQ search.** `.invoke()` is LangChain's standard "run this" command. Behind the scenes: turn the question into 384 numbers → find the 3 nearest FAQ vectors → return them as Documents (text + metadata). |
+| 49 | `+ tickets_retriever.invoke(query)` | Runs the ticket search and **joins** its 3 results onto the list (`+` on two lists sticks them together). |
+| 50 | `+ guides_retriever.invoke(query)` | Runs the guide search and joins its 3 results. |
+| 51 | `)` | Final result: **one list of 9 Documents**, always in the order FAQ ×3 → tickets ×3 → guides ×3. |
+
+The three searches run **one after another**, not at the same time. Each one also converts the question into numbers **separately**, so the same question is embedded 3 times. With a small local model this takes only milliseconds, but it's an easy optimisation if the project grows.
+
+**Part 9: Return the finished search tool (line 53)**
+
+```python
+    return RunnableLambda(retrieve)
+```
+
+| Line | What it does |
+|---|---|
+| 53 | Wraps `retrieve` in a `RunnableLambda` and hands it back. Now it can be dropped into the LangChain pipeline in [rag_chain.py](rag_chain.py) like any other building block: `retriever \| _format_docs`. It also gains standard methods such as `.invoke(question)`. |
+
+#### How `retriever.py` is used
+
+```python
+# in rag_chain.py
+retriever = build_retriever()          # build the search tool once (loads model, opens DB)
+docs = retriever.invoke("Why is my bill higher this month?")   # search: returns 9 Documents
+```
+
+| When | What runs | How often |
+|---|---|---|
+| App starts | `build_retriever()`: load model, open 3 collections, create 3 retrievers | **Once** (the website caches it) |
+| Each customer question | `retrieve(question)`: embed question, search 3 collections, join results | **Every question** |
+
+**Changing the number of results:** change `K_FAQ`, `K_TICKETS`, `K_GUIDES` in [config.py](config.py), or call `build_retriever(k_faq=2, k_tickets=4, k_guides=3)` from [rag_chain.py](rag_chain.py). More results give the AI more context but more noise; fewer are more focused but may miss something.
+
 ---
 
-### 5.7 `rag_chain.py` — the brain
+### 5.8 `rag_chain.py` — the brain
 
 **In plain words:** The assembly line that turns a question into an answer: **search → format → build prompt → ask AI → clean up text**.
 
@@ -364,9 +1387,410 @@ Issue: Double charged for monthly plan
 | `reasoning_format` | `"parsed"` | The model's internal "thinking" is separated out so only the final answer is shown |
 | `max_retries` | `2` | Retry twice if the network call fails |
 
+#### Line-by-line walkthrough of `rag_chain.py`
+
+> Line numbers match [rag_chain.py](rag_chain.py). This is the file where **R**etrieval, **A**ugmentation (adding the found text to the prompt) and **G**eneration (the AI writing the answer) come together, the three letters of "RAG".
+
+**Part 1: Description (lines 1–4)**
+
+```python
+"""
+Builds the RAG chain:
+  merged retriever → prompt → Qwen3.8-27B on Groq → string output
+"""
+```
+
+| Line | What it does |
+|---|---|
+| 1–4 | Docstring: a one-line map of the pipeline this file builds. Search → prompt → AI → plain text. |
+
+**Part 2: Imports (lines 5–12)**
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.documents import Document
+from langchain_groq import ChatGroq
+
+from config import LLM_MODEL, LLM_TEMPERATURE
+from retriever import build_retriever
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 5 | `ChatPromptTemplate` | A **fill-in-the-blanks message template** for chat AIs. You write the message once with blanks like `{context}` and `{question}`, and it fills them in for every new question. |
+| 6 | `StrOutputParser` | Takes the AI's reply (which arrives as a message object with extra details) and pulls out **just the text**. |
+| 7 | `RunnablePassthrough` | A building block that **passes its input through unchanged**. It's used to carry the customer's question forward to the prompt. |
+| 8 | `Document` | The Document type, used only in a type hint on line 31. |
+| 9 | `from langchain_groq import ChatGroq` | The connector to **Groq**, the cloud service that runs the Qwen AI model. |
+| 11 | `from config import LLM_MODEL, LLM_TEMPERATURE` | Brings in the AI model name and temperature from [config.py](config.py). The blank line before it is a Python convention: outside libraries first, then the project's own files. |
+| 12 | `from retriever import build_retriever` | Imports our own search tool from [retriever.py](retriever.py). |
+
+**Part 3: The system prompt, the bot's instructions (lines 14–28)**
+
+```python
+SYSTEM_PROMPT = """You are a helpful and professional telecom customer care assistant.
+Your job is to help customers resolve technical issues with their mobile service.
+
+Use ONLY the context below to answer the customer's question.
+The context comes from three sources, each labelled in square brackets:
+- [FAQ] entries (general policy and how-to information)
+- [TICKET] past support tickets (real resolved cases with step-by-step resolutions)
+- [GUIDE] excerpts from the telecom technical reference guide (background and troubleshooting procedures)
+
+If the context does not contain enough information to answer confidently, say so clearly \
+and suggest the customer call 611 or use the MyTelecom app.
+
+Context:
+{context}
+"""
+```
+
+A **system prompt** is the hidden instruction sheet given to the AI before the customer's question. The customer never sees it, but it shapes every answer.
+
+| Line(s) | Text | What it does |
+|---|---|---|
+| 14 | `SYSTEM_PROMPT = """…` | Stores the instructions in a setting. Triple quotes `"""` allow text spanning many lines. |
+| 14–15 | "You are a helpful and professional telecom customer care assistant…" | Gives the AI a **role** and a **goal**, which sets its tone and focus. |
+| 17 | "Use **ONLY** the context below…" | **Grounding**: tells the AI not to rely on its general knowledge. This is the main defence against made-up answers (hallucinations). |
+| 18–21 | "The context comes from three sources, each labelled in square brackets: [FAQ]… [TICKET]… [GUIDE]…" | Explains what kinds of information it will receive, and uses the **same labels** that `_format_docs` puts on each snippet, so the AI knows how to treat each one: FAQs for policy, tickets for proven fixes, the guide for technical background. (An earlier version listed only FAQ and tickets, even though guide chunks were always sent. The AI still read them, but it wasn't told what they were.) |
+| 23–24 | "If the context does not contain enough information… call 611 or use the MyTelecom app." | A **safe fallback**: when unsure, admit it and point to a human channel instead of guessing. The `\` at the end of line 23 joins lines 23 and 22 into one line of text. |
+| 26–27 | `Context:` `{context}` | **The blank to fill in.** At run time, the 9 search results replace `{context}`. |
+
+**Part 4: Formatting the search results (lines 31–36)**
+
+```python
+def _format_docs(docs: list[Document]) -> str:
+    sections = []
+    for doc in docs:
+        source = doc.metadata.get("source", "unknown").upper()
+        sections.append(f"[{source}]\n{doc.page_content}")
+    return "\n\n---\n\n".join(sections)
+```
+
+The retriever returns a list of 9 Document objects, but the prompt needs **plain text**. This function converts one into the other.
+
+| Line | Code | What it does |
+|---|---|---|
+| 31 | `def _format_docs(docs: list[Document]) -> str:` | Takes a list of Documents and returns one string. The `_` at the start of the name is a Python convention meaning "**internal helper**, only meant to be used inside this file". |
+| 32 | `sections = []` | Empty list to collect each formatted snippet. |
+| 33 | `for doc in docs:` | Go through the 9 Documents one by one. |
+| 34 | `source = doc.metadata.get("source", "unknown").upper()` | Reads the `source` label set by the ingest scripts (`faq`, `ticket` or `guide`). `.get(..., "unknown")` uses `"unknown"` if the label is missing, instead of crashing. `.upper()` makes it capitals: `FAQ`, `TICKET`, `GUIDE`. |
+| 35 | `sections.append(f"[{source}]\n{doc.page_content}")` | Builds one labelled snippet: the label in square brackets, a line break, then the text. |
+| 36 | `return "\n\n---\n\n".join(sections)` | Glues all snippets into one block, with a `---` divider and blank lines between them, so the AI can clearly see where one snippet ends and the next begins. |
+
+**Real output** for the question *"How do I enable Wi-Fi calling?"* (first part shown; the full block is about 3,300 characters):
+
+```
+[FAQ]
+Q: How do I enable Wi-Fi calling?
+A: Go to Settings > Phone > Wi-Fi Calling and toggle it on. Wi-Fi calling lets you make and
+receive calls over a Wi-Fi network when cellular signal is weak. Your plan must include this
+feature; if not, call 611 to add it.
+
 ---
 
-### 5.8 `app.py` — the website
+[FAQ]
+Q: Why am I unable to make international calls?
+A: International calling must be enabled on your account...
+
+---
+...  (then 3 [TICKET] snippets and 3 [GUIDE] snippets)
+```
+
+**Part 5: Building the chain (lines 39–40)**
+
+```python
+def build_chain():
+    retriever = build_retriever()
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 39 | `def build_chain():` | The main function. `app.py` and `main.py` call it **once** at start-up to get a ready-to-use chatbot pipeline. |
+| 40 | `retriever = build_retriever()` | Creates the search tool from [retriever.py](retriever.py) (loads the embedding model, opens the 3 collections). Uses the default 3 results per collection. |
+
+**Part 6: The prompt template (lines 42–45)**
+
+```python
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", "{question}"),
+    ])
+```
+
+Chat AIs receive a conversation as a list of messages, each with a **role**:
+
+| Line | Code | What it does |
+|---|---|---|
+| 42 | `ChatPromptTemplate.from_messages([...])` | Creates the template from a list of (role, text) pairs. |
+| 43 | `("system", SYSTEM_PROMPT)` | **Message 1, role "system"**: the instructions + the context (blank `{context}`). The AI treats this as its rules. |
+| 44 | `("human", "{question}")` | **Message 2, role "human"**: the customer's question (blank `{question}`). |
+
+When filled in for the Wi-Fi example, the AI receives 2 messages: a system message of about **3,800 characters** (instructions + 9 snippets) and a human message of **30 characters** (the question). Almost all of what the AI reads is the retrieved context.
+
+**Part 7: The AI model settings (lines 47–54)**
+
+```python
+    llm = ChatGroq(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        max_tokens=None,
+        reasoning_format="parsed",
+        timeout=None,
+        max_retries=2,
+    )
+```
+
+`llm` stands for **Large Language Model**. This creates the connection to the AI; nothing is sent yet.
+
+| Line | Setting | What it does |
+|---|---|---|
+| 47 | `ChatGroq(...)` | Connects to Groq. It automatically reads your **`GROQ_API_KEY`** from the environment (loaded from `.env` by `app.py` / `main.py`). If the key is missing, this is where it fails. |
+| 48 | `model=LLM_MODEL` | Which AI model Groq should run. Set in [config.py](config.py) to `"qwen/qwen3.8-27b"`: Qwen3.8 with 27 billion parameters. |
+| 49 | `temperature=LLM_TEMPERATURE` | Set to `0` in [config.py](config.py). **Randomness dial.** 0 = always pick the most likely next word → consistent, factual answers. Higher values (e.g. 0.7) give more varied, creative wording. Support answers should be predictable, so 0 is right here. |
+| 50 | `max_tokens=None` | No limit on answer length; the model decides when it's finished. |
+| 51 | `reasoning_format="parsed"` | Qwen is a "**reasoning**" model: it thinks step by step before answering. `"parsed"` tells Groq to put that thinking in a **separate field**, so it doesn't appear in the customer's answer. (Other options: `"raw"` would mix the thinking into the answer; `"hidden"` would drop it entirely.) |
+| 52 | `timeout=None` | No time limit on waiting for Groq's reply. |
+| 53 | `max_retries=2` | If the request fails (network glitch, Groq briefly busy), try **2 more times** before giving up. |
+
+**Part 8: Connecting everything into one pipeline (lines 56–62)**
+
+```python
+    chain = (
+        {"context": retriever | _format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+    return chain
+```
+
+This is the heart of the file. It's written in **LCEL** (LangChain Expression Language). The `|` symbol (called a "pipe") means **"send the output of the left side into the right side"**, like an assembly line.
+
+| Line | Code | What it does |
+|---|---|---|
+| 57 | `{"context": …, "question": …}` | A **two-lane step**. The customer's question goes into *both* lanes at the same time, and the result is a dictionary with two named items. LangChain automatically turns `{ }` into a parallel step. |
+| 57 | `"context": retriever \| _format_docs` | **Lane 1:** question → search (9 Documents) → format into one labelled text block. Result is stored as `context`. |
+| 57 | `"question": RunnablePassthrough()` | **Lane 2:** the question passes through **unchanged** and is stored as `question`. Needed because the prompt has a `{question}` blank to fill, too. |
+| 58 | `\| prompt` | Takes `{context, question}` and **fills the blanks** in the template → 2 ready chat messages. |
+| 59 | `\| llm` | Sends the messages to **Qwen on Groq** → receives the AI's reply. |
+| 60 | `\| StrOutputParser()` | Pulls out **just the answer text** from the reply (dropping the separate reasoning and other details). |
+| 62 | `return chain` | Hands the finished pipeline back to `app.py` / `main.py`. |
+
+**The whole journey of one question:**
+
+```
+"How do I enable Wi-Fi calling?"
+        │
+        ├──► Lane 1: retriever ──► 9 Documents ──► _format_docs ──► "[FAQ]\nQ: How do I enable…\n---\n…"   = context
+        └──► Lane 2: RunnablePassthrough ─────────────────────────► "How do I enable Wi-Fi calling?"         = question
+        │
+        ▼
+   prompt     → [system: instructions + context]  [human: question]
+        ▼
+   llm        → Qwen thinks, then writes the answer (on Groq's servers)
+        ▼
+   StrOutputParser → "To enable Wi-Fi calling, go to Settings > Phone > Wi-Fi Calling…"
+```
+
+#### How `rag_chain.py` is used
+
+```python
+chain = build_chain()                        # once, at start-up
+chain.invoke("How do I enable Wi-Fi calling?")   # → full answer, all at once
+chain.stream("How do I enable Wi-Fi calling?")   # → answer arrives word by word
+```
+
+Both `app.py` and `main.py` use **`.stream()`**. The search and prompt-filling steps finish first (in a fraction of a second); then the AI's words are passed through to the screen **as they're generated**, so the customer sees the answer start appearing almost immediately instead of waiting for the whole reply.
+
+| When | What runs | How often |
+|---|---|---|
+| App starts | `build_chain()`: build retriever, template, AI connection, and pipeline | **Once** |
+| Each question | `chain.stream(question)`: search → format → fill prompt → AI → text | **Every question** |
+
+**Common changes:**
+
+| To change… | Edit |
+|---|---|
+| The bot's tone, rules or fallback message | `SYSTEM_PROMPT` (lines 14–28) |
+| How snippets are labelled for the AI | `_format_docs` (lines 31–36) |
+| The AI model | `LLM_MODEL` in [config.py](config.py) |
+| How creative the answers are | `LLM_TEMPERATURE` in [config.py](config.py) |
+| How many search results the AI sees | `K_FAQ`, `K_TICKETS`, `K_GUIDES` in [config.py](config.py) |
+
+#### Common questions about `rag_chain.py`
+
+**Q: On line 40, `retriever = build_retriever()`, we don't pass the question. Why?**
+
+Because that line **builds** the search tool; it doesn't **use** it yet. There are two separate moments:
+
+| Moment | Code | What happens | Question involved? |
+|---|---|---|---|
+| **1. Build** (once, at start-up) | `retriever = build_retriever()` (line 40) | Loads the embedding model, opens the 3 collections, creates the 3 retrievers, and returns the `retrieve` function wrapped in a `RunnableLambda` | ❌ No |
+| **2. Use** (every question) | `chain.stream(question)` in `app.py` / `main.py` | The question flows through the pipeline and reaches the retriever | ✅ Yes |
+
+**An analogy:** line 40 is like **installing a coffee machine**: plugging it in, filling the water and beans. You don't need a coffee order to install it. Each customer's question is **pressing the button**, which can happen many times on the same machine.
+
+**Why it's designed this way:** building is **slow** (loading the model and opening the database takes a few seconds), while searching is **fast** (milliseconds). By building once and reusing it for every question, the app avoids reloading everything on each message. That's also why `app.py` caches the chain with `@st.cache_resource`.
+
+You can see both moments by hand in a Python shell:
+
+```python
+from retriever import build_retriever
+retriever = build_retriever()                                 # build (no question)
+docs = retriever.invoke("How do I enable Wi-Fi calling?")     # use (question goes in here)
+```
+
+**Q: So where does the question actually enter?**
+
+Follow it through three files:
+
+```python
+# ① app.py: the question enters the chain
+response = st.write_stream(chain.stream(question))
+```
+
+```python
+# ② rag_chain.py, line 57: LangChain hands the question to the retriever automatically
+{"context": retriever | _format_docs, "question": RunnablePassthrough()}
+```
+
+```python
+# ③ retriever.py, lines 46–51: the question arrives here as `query`
+def retrieve(query: str) -> list[Document]:
+    return (
+        faq_retriever.invoke(query)
+        + tickets_retriever.invoke(query)
+        + guides_retriever.invoke(query)
+    )
+```
+
+**Q: On line 57, how does the question get in automatically when nothing seems to accept it as an argument?**
+
+It *is* accepted as an argument: `query` in `retrieve(query: str)` in [retriever.py](retriever.py). You just never see the call, because **LangChain makes the call for you**.
+
+**Line 55 doesn't run anything; it only describes the steps.**
+
+```python
+chain = (
+    {"context": retriever | _format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+```
+
+When Python runs this, **no searching happens and no question exists yet**. The `|` symbols just build a **recipe**, a list of steps saved inside the `chain` object:
+
+```
+chain = [ step 1: {context: retriever → _format_docs, question: passthrough},
+          step 2: prompt,
+          step 3: llm,
+          step 4: StrOutputParser ]
+```
+
+It's like writing a function with no input yet. Line 55 is the **definition**, not the **call**.
+
+**The question arrives later, when the chain is called:**
+
+```python
+chain.invoke("How do I enable Wi-Fi calling?")    # or chain.stream(...)
+```
+
+That's the moment the question is passed as an argument, to the **chain**. The chain then walks through its saved steps and passes the input to each one:
+
+```python
+# What LangChain does inside chain.invoke(question), simplified:
+
+# Step 1: the { } dictionary. Give the SAME input to every lane.
+context  = _format_docs( retriever.invoke(question) )   # ← here! the retriever gets the question
+question = question                                     # RunnablePassthrough: return input unchanged
+step1_output = {"context": context, "question": question}
+
+# Step 2 onward: each step's output becomes the next step's input
+messages = prompt.invoke(step1_output)
+reply    = llm.invoke(messages)
+answer   = StrOutputParser().invoke(reply)
+return answer
+```
+
+And `retriever.invoke(question)` is what finally calls `retrieve(query)`, with `query = "How do I enable Wi-Fi calling?"`.
+
+**The same chain written without LangChain** would be just this:
+
+```python
+def chain(question):                                  # ← the question IS an argument
+    context  = _format_docs(retrieve(question))       # lane 1
+    messages = fill_prompt(context, question)         # lane 2 + prompt
+    reply    = call_groq(messages)                    # llm
+    return reply.text                                 # StrOutputParser
+```
+
+Line 55 is LangChain's shorthand for this function. Instead of writing `retrieve(question)` yourself, you list the steps, and LangChain writes the "pass the input along" part for you.
+
+**Q: How does `|` know to do this?**
+
+Every LangChain building block (`retriever`, `prompt`, `llm`, the parser) is a **Runnable**, which makes two promises:
+
+1. It has an `.invoke(input)` method.
+2. `a | b` creates a new Runnable whose `.invoke(x)` means **`b.invoke(a.invoke(x))`**: run `a`, then feed its result to `b`.
+
+A `{ }` dictionary inside a chain is automatically turned into a **parallel step**, whose `.invoke(x)` gives **the same `x` to every value in the dictionary**. That's why both `retriever` and `RunnablePassthrough()` receive the question.
+
+This is also why [retriever.py](retriever.py) wraps `retrieve` in `RunnableLambda`. A plain Python function doesn't have `.invoke()` and can't take part in `|`. Wrapping it turns it into a Runnable, so LangChain knows how to call it with the input.
+
+**In one line:**
+
+> **Line 55 defines the steps. `chain.stream(question)` in `app.py` provides the question. LangChain calls `retrieve(query)` with it.**
+
+**Q: So is this the right understanding? `build_retriever()` sets up ChromaDB and returns `retrieve()`, and later `retriever | _format_docs` calls `retrieve()` through `retriever.invoke(query)`?**
+
+Yes, that's correct, with two small refinements.
+
+**Step 1: `retriever = build_retriever()` (line 40, once at start-up)**
+
+- Loads the embedding model.
+- Opens the three ChromaDB collections (`faq`, `tickets`, `guides`).
+- Creates the three small retrievers.
+- **Defines** `retrieve()` but doesn't run it.
+- Returns `RunnableLambda(retrieve)`, which is stored in the variable `retriever`.
+
+So `retriever` is a **wrapper holding the `retrieve` function**.
+
+> **Refinement 1: "connection" to ChromaDB.** ChromaDB here isn't a separate server you connect to over a network. It runs **inside your Python program** and reads the files in `chroma_store/`. So "opens the database files" is more accurate than "establishes a connection". The effect is the same: it's ready to search.
+
+**Step 2: `{"context": retriever | _format_docs, ...}` (line 57)**
+
+This only **records** that "the retriever comes first, then `_format_docs`". Nothing runs yet.
+
+**Step 3: When a question arrives, `chain.stream(question)`**
+
+```
+chain.stream("How do I enable Wi-Fi calling?")
+   └─► LangChain calls  retriever.invoke("How do I enable Wi-Fi calling?")
+          └─► RunnableLambda calls  retrieve("How do I enable Wi-Fi calling?")
+                 └─► faq_retriever.invoke(...) + tickets_retriever.invoke(...) + guides_retriever.invoke(...)
+                        └─► returns 9 Documents
+   └─► LangChain calls  _format_docs(those 9 Documents)  →  context text
+```
+
+> **Refinement 2: who calls `.invoke()`?** *You* never write `retriever.invoke(query)` in this project. **LangChain** calls it automatically when the chain runs. Your code only provides the question to `chain.stream(...)`.
+
+**Q: `build_retriever()` finished running at start-up. How does `retrieve()` still reach the three retrievers later?**
+
+`retrieve()` uses `faq_retriever`, `tickets_retriever` and `guides_retriever` every time a question comes in, even though the function that created them (`build_retriever`) has already finished. That works because `retrieve` was defined **inside** `build_retriever`, so it **remembers** those variables. This is called a **closure**.
+
+**An analogy:** think of it as a backpack. When `retrieve` is created, it packs the three retrievers and carries them everywhere, even after `build_retriever()` is done.
+
+**In one line:**
+
+> **`build_retriever()` prepares everything once and returns `retrieve` in a wrapper. On each question, LangChain calls `retriever.invoke(question)`, which runs `retrieve(question)` using the three retrievers it remembered.**
+
+---
+
+### 5.9 `app.py` — the website
 
 **In plain words:** The friendly chat web page customers use. It looks like a messaging app.
 
@@ -398,7 +1822,7 @@ Then open http://localhost:8501.
 
 ---
 
-### 5.9 `main.py` — the terminal version
+### 5.10 `main.py` — the terminal version
 
 **In plain words:** The same chatbot without a website — you type in the terminal and read the answer there. Handy for quick testing.
 
@@ -449,14 +1873,39 @@ Goodbye!
 | `.env.example` | Template — copy it to `.env` and fill in values |
 | `pyproject.toml` | Project name, Python version (3.11+), and list of libraries |
 | `uv.lock` | Exact versions of every library, so everyone installs the same thing |
-| `.gitignore` | Tells git which files to never upload (e.g. `.env`, `.venv/`) |
+| `.gitignore` | Tells git which files to never upload (e.g. `.env`, `.venv/`, `chroma_store/`) |
+| `config.py` | The project's **own settings**: paths, collection names, embedding and AI model, chunk size, results per collection. See [section 5.3](#53-configpy--the-settings-file) |
+| `LICENSE` | The MIT licence: anyone may use, copy and modify the code, as long as they keep the copyright notice. Without a licence file, others legally can't reuse public code |
 
 **Required keys in `.env`**
 
 | Key | Where to get it | Used for |
 |---|---|---|
 | `GROQ_API_KEY` | https://console.groq.com | Calling the AI model |
-| `HF_TOKEN` | https://huggingface.co/settings/tokens | Downloading the embedding model |
+| `HF_TOKEN` | https://huggingface.co/settings/tokens | Downloading the embedding model (optional, see below) |
+
+**Q: Is `HF_TOKEN` really required?**
+
+Not really. The embedding model (`all-MiniLM-L6-v2`) is public, so it downloads without a token. The token only helps you avoid **download rate limits**.
+
+**Q: What is a "rate limit"?**
+
+Hugging Face lets anyone download public models for free, but it limits how much each visitor can download in a given period. This limit is called a **rate limit**. It stops one person or bot from overloading their servers.
+
+| | Without a token | With a token (`HF_TOKEN`) |
+|---|---|---|
+| Who Hugging Face thinks you are | An anonymous visitor | A logged-in user |
+| Download limit | Smaller | Bigger |
+| Risk of being blocked | Higher. You may briefly see an error like `429 Too Many Requests` | Much lower |
+
+**An analogy:** a public library lets anyone walk in and read. A guest can borrow only 2 books at a time; a member with a library card can borrow 10. The book (the model) is free either way. The card (the token) just raises your borrowing limit.
+
+**Q: Does this project need it?**
+
+Hardly. The model is small (about 88 MB) and is downloaded only **once**. After that it's saved on your computer (in `C:\Users\<you>\.cache\huggingface\hub\`) and runs locally, so you'd almost never hit the anonymous limit. The token is a safety net. It matters more when:
+
+- downloading many models, or very large ones
+- working on a shared network (office, college, cloud server), where many people share the same limit
 
 **Libraries used (from `pyproject.toml`)**
 
@@ -517,19 +1966,26 @@ python main.py               # terminal
 
 **Add a new FAQ**
 1. Add a row to `data/faq.csv` (`id,question,answer,category`).
-2. Delete the `chroma_store/` folder *(see note below)*.
-3. Re-run all three ingest scripts.
+2. `python ingest_faq.py`
+3. Restart the app (see note below).
 
 **Add a new ticket**
 1. Add a tuple to `TICKETS` in `data/seed_tickets.py`.
 2. `python data/seed_tickets.py`
-3. Delete `chroma_store/` and re-run all three ingest scripts.
+3. `python ingest_tickets.py`
+4. Restart the app.
 
 **Change the bot's tone or rules** → edit `SYSTEM_PROMPT` in `rag_chain.py`, then restart the app.
 
-**Give the AI more or less context** → change `k_faq`, `k_tickets`, `k_guides` in `retriever.py`.
+**Give the AI more or less context** → change `K_FAQ`, `K_TICKETS`, `K_GUIDES` in `config.py`, then restart the app.
 
-> ⚠️ **Important:** The ingest scripts **add** documents to the database; they don't replace existing ones. Running an ingest script twice creates duplicates. To refresh cleanly, delete the `chroma_store/` folder and run all three ingest scripts again.
+**Change any other setting** (models, chunk size, paths) → edit `config.py`. See ["After changing a setting, what do I need to re-run?"](#after-changing-a-setting-what-do-i-need-to-re-run).
+
+> ✅ **Re-running is safe:** each ingest script first empties its own collection and then loads the data fresh, so running a script twice never creates duplicates. You only need to re-run the script whose data changed.
+>
+> 🔁 **Restart the app afterwards:** the website keeps the database connection cached, so stop and restart `streamlit run app.py` to see the new data.
+>
+> 🧹 **Full reset:** to start completely from scratch, delete the `chroma_store/` folder and run all three ingest scripts.
 
 ---
 
@@ -540,9 +1996,10 @@ python main.py               # terminal
 | Bot says it doesn't have enough information for everything | `chroma_store/` is empty or missing | Run the three ingest scripts |
 | `GROQ_API_KEY` / authentication error | `.env` missing or wrong key | Check `.env` exists and the key is valid |
 | Very slow first start | Embedding model downloading | Wait; it's cached after the first run |
-| Same snippet appears several times in answers | Ingest scripts were run more than once | Delete `chroma_store/` and re-ingest |
+| Same snippet appears several times in answers | Database was built with an older version of the ingest scripts, which added copies on every run | Delete `chroma_store/` and run the three ingest scripts once (current scripts no longer duplicate) |
 | Changes to data not reflected in the website | Chain is cached | Re-ingest, then stop and restart `streamlit run app.py` |
 | `ModuleNotFoundError` | Libraries not installed / wrong environment | Run `uv sync` and activate `.venv` |
+| `ModuleNotFoundError: No module named 'config'` | A script was copied or moved away from the project folder | Keep all the `.py` scripts together in the project folder; they all import `config.py` |
 
 ---
 

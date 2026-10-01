@@ -1,6 +1,7 @@
 """
 Ingests resolved tickets from data/tickets.db into the 'tickets' Chroma collection.
-Run once (or after adding new tickets): python ingest_tickets.py
+Safe to re-run: it replaces the collection each time.
+Run after adding new tickets: python ingest_tickets.py
 """
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -9,13 +10,10 @@ from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-CHROMA_DIR = "chroma_store"
-COLLECTION  = "tickets"
-DB_PATH     = os.path.join("data", "tickets.db")
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+from config import CHROMA_DIR, EMBED_MODEL, TICKETS_COLLECTION, TICKETS_DB_PATH
 
 
-def load_ticket_documents(db_path: str) -> list[Document]:
+def load_ticket_documents(db_path) -> list[Document]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -45,19 +43,26 @@ def load_ticket_documents(db_path: str) -> list[Document]:
 
 def main():
     print("Loading ticket documents from SQLite...")
-    docs = load_ticket_documents(DB_PATH)
+    docs = load_ticket_documents(TICKETS_DB_PATH)
     print(f"  {len(docs)} resolved tickets loaded.")
 
     print("Initialising embedding model...")
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
 
-    print(f"Embedding and storing in Chroma collection '{COLLECTION}'...")
-    vectorstore = Chroma.from_documents(
-        documents=docs,
-        embedding=embeddings,
-        collection_name=COLLECTION,
+    vectorstore = Chroma(
+        collection_name=TICKETS_COLLECTION,
+        embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
     )
+
+    # Empty the collection first so re-running replaces the data instead of duplicating it
+    existing_ids = vectorstore.get()["ids"]
+    if existing_ids:
+        print(f"  Removing {len(existing_ids)} existing vectors...")
+        vectorstore.delete(ids=existing_ids)
+
+    print(f"Embedding and storing in Chroma collection '{TICKETS_COLLECTION}'...")
+    vectorstore.add_documents(docs)
     print(f"  Done. {vectorstore._collection.count()} vectors stored.")
 
 
