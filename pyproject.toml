@@ -18,9 +18,24 @@ dependencies = [
     "pypdf",
     "langchain-community",
     "langchain-text-splitters",
-    "torchvision",
+    # Listed explicitly so it can be pinned to the CPU-only build below
+    "torch",
+    # Newer SQLite for Linux servers whose system SQLite is too old for ChromaDB (see sqlite_compat.py)
+    "pysqlite3-binary; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 # App, not a library: install dependencies only, don't package data/ or chroma_store/
 [tool.setuptools]
 py-modules = []
+
+# CPU-only PyTorch: the default Linux build bundles multi-GB GPU (CUDA) libraries this app never uses.
+# macOS builds on PyPI are already CPU-only, so they keep the default index.
+# "flat" = a plain list of torch wheel files only, so no other package can be picked up from it.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu/torch/"
+format = "flat"
+explicit = true

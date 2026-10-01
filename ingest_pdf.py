@@ -7,6 +7,7 @@ Run after regenerating the PDF: python ingest_pdf.py
 """
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import re
 
 from langchain_community.document_loaders import PyPDFLoader

@@ -78,7 +78,7 @@ flowchart TB
     L2["<b>Orchestration Layer</b><br/>rag_chain.py<br/><i>Wires retriever → prompt → LLM → parser into one pipeline</i>"]
     L3["<b>Retrieval Layer</b><br/>retriever.py<br/><i>Semantic search over three collections, merges results</i>"]
     L4["<b>Storage Layer</b><br/>ChromaDB (chroma_store/)<br/><i>Persists vectors + text + metadata</i>"]
-    L5["<b>Ingestion Layer</b><br/>ingest_faq.py · ingest_tickets.py · ingest_pdf.py<br/><i>Load → transform → embed → store</i>"]
+    L5["<b>Ingestion Layer</b><br/>ingest_faq.py · ingest_tickets.py · ingest_pdf.py<br/>setup_vector_store.py (auto-build on start-up)<br/><i>Load → transform → embed → store</i>"]
     L6["<b>Source Data Layer</b><br/>faq.csv · tickets.db · telecom_guide.pdf<br/>seed_tickets.py · generate_pdf.py"]
     EXT["<b>External Services</b><br/>Groq API (LLM) · HuggingFace Hub (model download)"]
     CFG["<b>Configuration</b><br/>config.py<br/><i>Paths, model names, chunking, k values</i>"]
@@ -108,6 +108,25 @@ flowchart TB
 Each knowledge source has its own ingestion script following the classic **ETL (Extract → Transform → Load)** pattern.
 
 Every run is **idempotent**: before loading, the script deletes all existing vectors in its own collection, then adds the fresh set. Re-running a script therefore replaces its data rather than duplicating it, and never touches the other two collections. The collection is emptied in place (not dropped), so ChromaDB keeps reusing the same on-disk index folder.
+
+### Start-up bootstrap
+
+`chroma_store/` is git-ignored, so a fresh clone or server starts with no vectors. Both entry points call `ensure_vector_store()` (`setup_vector_store.py`) before building the chain. It reads each collection's size directly from ChromaDB and runs the ingest script only for collections that are **missing or empty**.
+
+```mermaid
+flowchart LR
+    S(["app.py / main.py start"]) --> E["ensure_vector_store()"]
+    E --> Q{"faq / tickets / guides<br/>each non-empty?"}
+    Q -->|yes| B["build_chain()"]
+    Q -->|"no (fresh server)"| I["run that collection's<br/>ingest_*.main()"] --> B
+    B --> R(["ready for questions"])
+```
+
+| Situation | Cost |
+|---|---|
+| Fresh server (no `chroma_store/`) | All three ingests run once: about a minute, behind a "Preparing the knowledge base" spinner |
+| Normal restart | Three `count()` calls: milliseconds |
+| Source data changed | **Not detected** (collections aren't empty). Re-run the matching ingest script manually |
 
 ```mermaid
 flowchart LR
@@ -234,10 +253,11 @@ flowchart TB
 | Concern | Where it lives |
 |---|---|
 | Secrets | `.env` (git-ignored); template in `.env.example` |
-| Vector data | `chroma_store/` — a local SQLite file plus binary index folders |
+| Vector data | `chroma_store/` — a local SQLite file plus binary index folders; built automatically on first start-up (`setup_vector_store.py`) |
 | Embedding model | Downloaded once to the HuggingFace cache, then runs locally on CPU |
 | LLM | Remote — Groq API |
-| Dependencies | `pyproject.toml` + `uv.lock` (managed by `uv`) |
+| Dependencies | `pyproject.toml` + `uv.lock` (managed by `uv`); `requirements.txt` exported for `pip` / hosting platforms. PyTorch pinned to the **CPU-only** build (no CUDA/NVIDIA packages); `torchvision` not used |
+| SQLite compatibility | ChromaDB needs SQLite ≥ 3.35. `sqlite_compat.py` (imported before ChromaDB everywhere) swaps in `pysqlite3-binary` only when the system SQLite is older; the package is installed on Linux x86_64 only |
 | Settings | `config.py`; all paths are absolute, built from the project folder, so scripts run from any working directory |
 
 ---
@@ -259,6 +279,9 @@ flowchart TB
 | 11 | **Two front-ends over one chain** | UI and CLI reuse identical logic (`build_chain()`) | — |
 | 12 | **Central `config.py`** | One definition of the embedding model guarantees ingestion and retrieval always match; tuning needs one edit | Settings are code, not environment variables, so changing them means editing a file |
 | 13 | **Clean PDF text before chunking** | Repeated headers/footers carry no meaning and blur chunk embeddings | Patterns are specific to this PDF's layout |
+| 14 | **Build the vector store on start-up instead of committing it** | Keeps binary database files out of git; any fresh server self-initialises | First start on a new server is ~1 minute slower; changed source data still needs a manual re-ingest |
+| 15 | **CPU-only PyTorch** | Removes several GB of CUDA libraries; fits free hosting tiers; the small embedding model runs fine on CPU | Can't use a GPU without changing the dependency pin |
+| 16 | **Conditional SQLite shim** | Lets ChromaDB run on older Linux images without code changes per platform | One extra import that must precede ChromaDB in every entry point |
 
 ---
 

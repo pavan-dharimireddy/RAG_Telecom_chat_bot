@@ -1,9 +1,11 @@
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import streamlit as st
 from dotenv import load_dotenv
 from rag_chain import build_chain
+from setup_vector_store import ensure_vector_store
 
 load_dotenv()
 
@@ -24,8 +26,9 @@ st.set_page_config(
     layout="centered",
 )
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Preparing the knowledge base (first start only)…")
 def get_chain():
+    ensure_vector_store()
     return build_chain()
 
 if "messages" not in st.session_state:

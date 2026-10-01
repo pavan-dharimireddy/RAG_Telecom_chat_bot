@@ -24,6 +24,8 @@ For diagrams and system design, see [architecture.md](architecture.md).
    - [rag_chain.py](#58-rag_chainpy--the-brain)
    - [app.py](#59-apppy--the-website)
    - [main.py](#510-mainpy--the-terminal-version)
+   - [setup_vector_store.py](#511-setup_vector_storepy--builds-the-database-automatically)
+   - [sqlite_compat.py](#512-sqlite_compatpy--the-sqlite-safety-fix)
 6. [Data files](#6-data-files)
 7. [Configuration files](#7-configuration-files)
 8. [How to run it (step by step)](#8-how-to-run-it-step-by-step)
@@ -325,6 +327,8 @@ rag_telecom_chatbot/
 ├── ingest_faq.py        ← 📥 Loads FAQs into the vector database
 ├── ingest_tickets.py    ← 📥 Loads past tickets into the vector database
 ├── ingest_pdf.py        ← 📥 Loads the PDF manual into the vector database
+├── setup_vector_store.py ← 🔧 Builds any empty collection automatically on start-up
+├── sqlite_compat.py     ← 🩹 SQLite fix for old Linux servers (does nothing elsewhere)
 │
 ├── data/
 │   ├── faq.csv              ← 25 question/answer pairs
@@ -338,6 +342,7 @@ rag_telecom_chatbot/
 ├── .env                 ← 🔑 Your secret API keys (never share / commit)
 ├── .env.example         ← Template showing which keys are needed
 ├── pyproject.toml       ← List of Python libraries the project needs
+├── requirements.txt     ← Same list in the format hosting platforms read
 ├── uv.lock              ← Exact pinned versions of those libraries
 ├── README.md            ← Quick-start instructions
 ├── LICENSE              ← MIT licence: how others may reuse the code
@@ -629,11 +634,12 @@ Run whenever the CSV changes: python ingest_faq.py
 |---|---|
 | 1–5 | A **docstring**: a note for humans at the top of the file saying what the script does and how to run it. Python ignores it when running. |
 
-**Part 2: Imports, the tools this script borrows (lines 6–11)**
+**Part 2: Imports, the tools this script borrows (lines 6–12)**
 
 ```python
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import pandas as pd
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
@@ -644,12 +650,13 @@ from langchain_huggingface import HuggingFaceEmbeddings
 |---|---|---|
 | 6 | `import os` | Loads Python's built-in "operating system" toolkit, used for file paths and settings. |
 | 7 | `os.environ["TRANSFORMERS_VERBOSITY"] = "error"` | Tells the AI-model library to **only print real errors**, not dozens of info/warning lines. It's set *before* the libraries below are loaded so they pick it up. Purely cosmetic: it keeps the output clean. |
-| 8 | `import pandas as pd` | Loads **pandas**, a library for reading spreadsheet-like data (CSV files). `as pd` is just a short nickname. |
-| 9 | `from langchain_core.documents import Document` | Loads LangChain's **Document** type: a standard "box" holding a piece of text (`page_content`) plus labels about it (`metadata`). |
-| 10 | `from langchain_chroma import Chroma` | Loads the connector to the **ChromaDB** vector database. |
-| 11 | `from langchain_huggingface import HuggingFaceEmbeddings` | Loads the tool that runs the **embedding model** (turns text into 384 numbers). |
+| 8 | `import sqlite_compat  # noqa: …` | Loads the project's small **SQLite safety fix** ([sqlite_compat.py](sqlite_compat.py), see [section 5.12](#512-sqlite_compatpy--the-sqlite-safety-fix)). ChromaDB needs a recent version of SQLite; on the rare server that has an older one, this swaps in a newer copy. On your PC it does nothing. It must come **before** any line that loads ChromaDB (line 11). The `# noqa: F401` comment tells code checkers "yes, this import looks unused, but it's on purpose". |
+| 9 | `import pandas as pd` | Loads **pandas**, a library for reading spreadsheet-like data (CSV files). `as pd` is just a short nickname. |
+| 10 | `from langchain_core.documents import Document` | Loads LangChain's **Document** type: a standard "box" holding a piece of text (`page_content`) plus labels about it (`metadata`). |
+| 11 | `from langchain_chroma import Chroma` | Loads the connector to the **ChromaDB** vector database. |
+| 12 | `from langchain_huggingface import HuggingFaceEmbeddings` | Loads the tool that runs the **embedding model** (turns text into 384 numbers). |
 
-**Part 3: Settings, borrowed from `config.py` (line 13)**
+**Part 3: Settings, borrowed from `config.py` (line 14)**
 
 ```python
 from config import CHROMA_DIR, EMBED_MODEL, FAQ_COLLECTION, FAQ_CSV_PATH
@@ -657,15 +664,15 @@ from config import CHROMA_DIR, EMBED_MODEL, FAQ_COLLECTION, FAQ_CSV_PATH
 
 | Line | Code | What it does |
 |---|---|---|
-| 13 | `from config import …` | Brings in four settings from the project's central settings file, [config.py](config.py) (see [section 5.3](#53-configpy--the-settings-file)): |
+| 14 | `from config import …` | Brings in four settings from the project's central settings file, [config.py](config.py) (see [section 5.3](#53-configpy--the-settings-file)): |
 | | `CHROMA_DIR` | The folder where the vector database is saved (`chroma_store/`). |
 | | `EMBED_MODEL` | Which embedding model to use. Because every script imports it from the **same place**, ingestion and search can never accidentally use different models. |
 | | `FAQ_COLLECTION` | The name of the collection to fill: `"faq"`. |
 | | `FAQ_CSV_PATH` | The full path to `data/faq.csv`. |
 
-Names in CAPITALS are a Python convention meaning "this is a setting; it doesn't change while the program runs". The blank line before this import separates outside libraries (lines 8–11) from the project's own files.
+Names in CAPITALS are a Python convention meaning "this is a setting; it doesn't change while the program runs". The blank line before this import separates outside libraries (lines 9–12) from the project's own files.
 
-**Part 4: Reading the CSV into Documents (lines 16–25)**
+**Part 4: Reading the CSV into Documents (lines 17–26)**
 
 ```python
 def load_faq_documents(csv_path) -> list[Document]:
@@ -682,17 +689,17 @@ def load_faq_documents(csv_path) -> list[Document]:
 
 | Line | Code | What it does |
 |---|---|---|
-| 16 | `def load_faq_documents(csv_path) -> list[Document]:` | Defines a reusable **function**. It takes a file path and gives back a list of Documents. The `-> list[Document]` part is a **type hint**: a note for readers and code editors about what comes back, not a rule Python enforces. |
-| 17 | `df = pd.read_csv(csv_path)` | Reads the whole CSV into a **DataFrame** (`df`), basically a spreadsheet in memory with columns `id`, `question`, `answer`, `category`. |
-| 18 | `docs = []` | Creates an empty list to collect the Documents. |
-| 19 | `for _, row in df.iterrows():` | Loops over the spreadsheet **one row at a time**. `iterrows()` gives (row number, row); the `_` means "I don't need the row number". |
-| 20 | `content = f"Q: {row['question']}\nA: {row['answer']}"` | Builds the text that will be embedded and searched. The `f"..."` (f-string) inserts values into `{ }`; `\n` is a line break. Result: `Q: How do I check my data balance?` / `A: Dial *123#…` |
-| 21–24 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
-| 22 | `page_content=content` | The text itself: what gets embedded and later shown to the AI. |
-| 23 | `metadata={...}` | Labels stored alongside (not embedded): `source: "faq"` (used later to print `[FAQ]` in the prompt), the row's `category` (e.g. `"data"`), and `faq_id` (the row's ID, converted to text with `str()` because Chroma metadata must be simple text/number values). |
-| 25 | `return docs` | Hands the finished list (25 Documents) back to whoever called the function. |
+| 17 | `def load_faq_documents(csv_path) -> list[Document]:` | Defines a reusable **function**. It takes a file path and gives back a list of Documents. The `-> list[Document]` part is a **type hint**: a note for readers and code editors about what comes back, not a rule Python enforces. |
+| 18 | `df = pd.read_csv(csv_path)` | Reads the whole CSV into a **DataFrame** (`df`), basically a spreadsheet in memory with columns `id`, `question`, `answer`, `category`. |
+| 19 | `docs = []` | Creates an empty list to collect the Documents. |
+| 20 | `for _, row in df.iterrows():` | Loops over the spreadsheet **one row at a time**. `iterrows()` gives (row number, row); the `_` means "I don't need the row number". |
+| 21 | `content = f"Q: {row['question']}\nA: {row['answer']}"` | Builds the text that will be embedded and searched. The `f"..."` (f-string) inserts values into `{ }`; `\n` is a line break. Result: `Q: How do I check my data balance?` / `A: Dial *123#…` |
+| 22–25 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
+| 23 | `page_content=content` | The text itself: what gets embedded and later shown to the AI. |
+| 24 | `metadata={...}` | Labels stored alongside (not embedded): `source: "faq"` (used later to print `[FAQ]` in the prompt), the row's `category` (e.g. `"data"`), and `faq_id` (the row's ID, converted to text with `str()` because Chroma metadata must be simple text/number values). |
+| 26 | `return docs` | Hands the finished list (25 Documents) back to whoever called the function. |
 
-**Part 5: The main program (lines 28–50)**
+**Part 5: The main program (lines 29–51)**
 
 ```python
 def main():
@@ -703,10 +710,10 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 28 | `def main():` | Defines the main function: the script's to-do list, in order. |
-| 29 | `print("Loading FAQ documents...")` | Progress message. |
-| 30 | `docs = load_faq_documents(FAQ_CSV_PATH)` | Calls the function above. `docs` now holds 25 Documents. |
-| 31 | `print(f"  {len(docs)} FAQ entries loaded.")` | `len(docs)` counts the items → prints `25 FAQ entries loaded.` |
+| 29 | `def main():` | Defines the main function: the script's to-do list, in order. |
+| 30 | `print("Loading FAQ documents...")` | Progress message. |
+| 31 | `docs = load_faq_documents(FAQ_CSV_PATH)` | Calls the function above. `docs` now holds 25 Documents. |
+| 32 | `print(f"  {len(docs)} FAQ entries loaded.")` | `len(docs)` counts the items → prints `25 FAQ entries loaded.` |
 
 ```python
     print("Initialising embedding model...")
@@ -715,8 +722,8 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 33 | `print(...)` | Progress message. |
-| 34 | `embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)` | Loads the MiniLM embedding model. The first time ever, it **downloads** it (~88 MB) from Hugging Face; after that it loads from your computer's cache. Nothing is embedded yet; this just gets the tool ready. |
+| 34 | `print(...)` | Progress message. |
+| 35 | `embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)` | Loads the MiniLM embedding model. The first time ever, it **downloads** it (~88 MB) from Hugging Face; after that it loads from your computer's cache. Nothing is embedded yet; this just gets the tool ready. |
 
 ```python
     vectorstore = Chroma(
@@ -728,10 +735,10 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 36–40 | `vectorstore = Chroma(...)` | **Opens** the `faq` collection in `chroma_store/`. If the folder or collection doesn't exist yet, Chroma **creates** it. |
-| 37 | `collection_name=FAQ_COLLECTION` | Which collection: `"faq"`. |
-| 38 | `embedding_function=embeddings` | Tells Chroma which model to use whenever it needs to turn text into vectors. |
-| 39 | `persist_directory=CHROMA_DIR` | Save to disk in `chroma_store/` (so the data survives after the script ends). |
+| 37–41 | `vectorstore = Chroma(...)` | **Opens** the `faq` collection in `chroma_store/`. If the folder or collection doesn't exist yet, Chroma **creates** it. |
+| 38 | `collection_name=FAQ_COLLECTION` | Which collection: `"faq"`. |
+| 39 | `embedding_function=embeddings` | Tells Chroma which model to use whenever it needs to turn text into vectors. |
+| 40 | `persist_directory=CHROMA_DIR` | Save to disk in `chroma_store/` (so the data survives after the script ends). |
 
 ```python
     # Empty the collection first so re-running replaces the data instead of duplicating it
@@ -743,11 +750,11 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 42 | `# Empty the collection…` | A **comment** (starts with `#`): a note for humans, ignored by Python. |
-| 43 | `existing_ids = vectorstore.get()["ids"]` | Asks Chroma for everything already in the collection and keeps only the list of **IDs** (every stored item has a unique ID). On a first run this list is empty. |
-| 44 | `if existing_ids:` | "If the list is not empty…" (an empty list counts as *false* in Python). |
-| 45 | `print(f"  Removing … existing vectors...")` | Says how many old items will be removed. |
-| 46 | `vectorstore.delete(ids=existing_ids)` | **Deletes** all old items. This is what prevents duplicates when the script runs again. |
+| 43 | `# Empty the collection…` | A **comment** (starts with `#`): a note for humans, ignored by Python. |
+| 44 | `existing_ids = vectorstore.get()["ids"]` | Asks Chroma for everything already in the collection and keeps only the list of **IDs** (every stored item has a unique ID). On a first run this list is empty. |
+| 45 | `if existing_ids:` | "If the list is not empty…" (an empty list counts as *false* in Python). |
+| 46 | `print(f"  Removing … existing vectors...")` | Says how many old items will be removed. |
+| 47 | `vectorstore.delete(ids=existing_ids)` | **Deletes** all old items. This is what prevents duplicates when the script runs again. |
 
 ```python
     print(f"Embedding and storing in Chroma collection '{FAQ_COLLECTION}'...")
@@ -757,11 +764,11 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 48 | `print(...)` | Progress message. |
-| 49 | `vectorstore.add_documents(docs)` | **The key step.** For each of the 25 Documents, Chroma (1) runs the embedding model to turn the text into 384 numbers, (2) gives it a new random ID, and (3) saves the vector, text and metadata to disk. |
-| 50 | `vectorstore._collection.count()` | Counts what's now in the collection, as a final check. Should print `25`. (The `_` at the start of `_collection` marks it as an "internal" part of the library; it works, but it isn't an official feature.) |
+| 49 | `print(...)` | Progress message. |
+| 50 | `vectorstore.add_documents(docs)` | **The key step.** For each of the 25 Documents, Chroma (1) runs the embedding model to turn the text into 384 numbers, (2) gives it a new random ID, and (3) saves the vector, text and metadata to disk. |
+| 51 | `vectorstore._collection.count()` | Counts what's now in the collection, as a final check. Should print `25`. (The `_` at the start of `_collection` marks it as an "internal" part of the library; it works, but it isn't an official feature.) |
 
-**Part 6: The start button (lines 53–54)**
+**Part 6: The start button (lines 54–55)**
 
 ```python
 if __name__ == "__main__":
@@ -770,7 +777,7 @@ if __name__ == "__main__":
 
 | Line | What it does |
 |---|---|
-| 53–54 | "If this file was **run directly** (`python ingest_faq.py`), call `main()`." If another file only *imports* this one (to reuse `load_faq_documents`, for example), `main()` does **not** run automatically. This is a standard Python pattern. |
+| 54–55 | "If this file was **run directly** (`python ingest_faq.py`), call `main()`." If another file only *imports* this one (to reuse `load_faq_documents`, for example), `main()` does **not** run automatically. This is a standard Python pattern. |
 
 ---
 
@@ -799,7 +806,7 @@ python ingest_tickets.py
 
 #### Line-by-line walkthrough of `ingest_tickets.py`
 
-> Line numbers match [ingest_tickets.py](ingest_tickets.py). This script has the same shape as `ingest_faq.py`. The **new** parts are reading from a SQLite database (lines 8 and 16–22) and building a three-part text (lines 27–31).
+> Line numbers match [ingest_tickets.py](ingest_tickets.py). This script has the same shape as `ingest_faq.py`. The **new** parts are reading from a SQLite database (lines 9 and 17–23) and building a three-part text (lines 28–32).
 
 **Part 1: Description (lines 1–5)**
 
@@ -807,11 +814,12 @@ python ingest_tickets.py
 |---|---|
 | 1–5 | Docstring: says this script loads **resolved** tickets from `data/tickets.db` into the `tickets` collection, and is safe to re-run. |
 
-**Part 2: Imports (lines 6–11)**
+**Part 2: Imports (lines 6–12)**
 
 ```python
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import sqlite3
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
@@ -821,10 +829,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 | Line | Code | What it does |
 |---|---|---|
 | 6–7 | `import os` + verbosity setting | Same as the FAQ script: file-path tools, and quieter library output. |
-| 8 | `import sqlite3` | **New.** Python's built-in tool for reading **SQLite** database files (`.db`). No installation needed; it comes with Python. |
-| 9–11 | `Document`, `Chroma`, `HuggingFaceEmbeddings` | Same as the FAQ script. |
+| 8 | `import sqlite_compat …` | The SQLite safety fix, same as in the FAQ script. |
+| 9 | `import sqlite3` | **New.** Python's built-in tool for reading **SQLite** database files (`.db`). No installation needed; it comes with Python. |
+| 10–12 | `Document`, `Chroma`, `HuggingFaceEmbeddings` | Same as the FAQ script. |
 
-**Part 3: Settings, borrowed from `config.py` (line 13)**
+**Part 3: Settings, borrowed from `config.py` (line 14)**
 
 ```python
 from config import CHROMA_DIR, EMBED_MODEL, TICKETS_COLLECTION, TICKETS_DB_PATH
@@ -832,12 +841,12 @@ from config import CHROMA_DIR, EMBED_MODEL, TICKETS_COLLECTION, TICKETS_DB_PATH
 
 | Line | Code | What it does |
 |---|---|---|
-| 13 | `from config import …` | Same idea as the FAQ script: four settings from [config.py](config.py). |
+| 14 | `from config import …` | Same idea as the FAQ script: four settings from [config.py](config.py). |
 | | `CHROMA_DIR`, `EMBED_MODEL` | The same database folder and the same embedding model as every other script. |
 | | `TICKETS_COLLECTION` | Fill the `tickets` collection this time. |
 | | `TICKETS_DB_PATH` | The full path to `data/tickets.db`. |
 
-**Part 4: Reading tickets from the database (lines 16–22)**
+**Part 4: Reading tickets from the database (lines 17–23)**
 
 ```python
 def load_ticket_documents(db_path) -> list[Document]:
@@ -851,13 +860,13 @@ def load_ticket_documents(db_path) -> list[Document]:
 
 | Line | Code | What it does |
 |---|---|---|
-| 16 | `def load_ticket_documents(db_path) -> list[Document]:` | Defines a function that takes the database path and returns a list of Documents. |
-| 17 | `conn = sqlite3.connect(db_path)` | **Opens a connection** to the database file, like opening a spreadsheet file before reading it. |
-| 18 | `conn.row_factory = sqlite3.Row` | Makes each result row readable **by column name** (`row['description']`) instead of only by position (`row[4]`). Easier to read and less error-prone. |
-| 19–21 | `rows = conn.execute("SELECT …").fetchall()` | Runs a **SQL query**, a question asked to the database: *"give me every column (`*`) from the `tickets` table, but only rows where status is `resolved`."* `fetchall()` collects all the matching rows into a list. Result: 19 rows (the 1 `escalated` ticket is skipped because it has no confirmed fix to recommend). |
-| 22 | `conn.close()` | **Closes** the database connection. Good practice: it frees the file as soon as we're done with it. |
+| 17 | `def load_ticket_documents(db_path) -> list[Document]:` | Defines a function that takes the database path and returns a list of Documents. |
+| 18 | `conn = sqlite3.connect(db_path)` | **Opens a connection** to the database file, like opening a spreadsheet file before reading it. |
+| 19 | `conn.row_factory = sqlite3.Row` | Makes each result row readable **by column name** (`row['description']`) instead of only by position (`row[4]`). Easier to read and less error-prone. |
+| 20–22 | `rows = conn.execute("SELECT …").fetchall()` | Runs a **SQL query**, a question asked to the database: *"give me every column (`*`) from the `tickets` table, but only rows where status is `resolved`."* `fetchall()` collects all the matching rows into a list. Result: 19 rows (the 1 `escalated` ticket is skipped because it has no confirmed fix to recommend). |
+| 23 | `conn.close()` | **Closes** the database connection. Good practice: it frees the file as soon as we're done with it. |
 
-**Part 5: Turning each ticket into a Document (lines 24–41)**
+**Part 5: Turning each ticket into a Document (lines 25–42)**
 
 ```python
     docs = []
@@ -882,32 +891,32 @@ def load_ticket_documents(db_path) -> list[Document]:
 
 | Line | Code | What it does |
 |---|---|---|
-| 24 | `docs = []` | Empty list to collect Documents. |
-| 25 | `for row in rows:` | Go through the tickets one at a time. |
-| 26 | `# Combine …` | Comment explaining the next step. |
-| 27–31 | `content = ( f"Issue: …\n" f"Description: …\n" f"Resolution: …" )` | Builds **one text block** from three columns. Python automatically joins strings written next to each other inside `( )`. Result:<br>`Issue: Unexpected roaming charges`<br>`Description: Customer returned from a trip to Spain…`<br>`Resolution: …bundle was activated 3 hours after…`<br>Keeping the problem **and** its fix together is the whole point: a customer describing the problem will also bring back the solution. |
-| 32–40 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
-| 33 | `page_content=content` | The text to embed and search. |
-| 34–39 | `metadata={...}` | Labels: `source: "ticket"` (shows as `[TICKET]` in the AI's prompt), `ticket_id` (e.g. `TK-004`), `category` (e.g. `roaming`), and `status` (always `resolved` here). Notice `ticket_id`, `category` and `status` are **not** in the searchable text; they're kept only as labels. |
-| 41 | `return docs` | Returns 19 Documents. |
+| 25 | `docs = []` | Empty list to collect Documents. |
+| 26 | `for row in rows:` | Go through the tickets one at a time. |
+| 27 | `# Combine …` | Comment explaining the next step. |
+| 28–32 | `content = ( f"Issue: …\n" f"Description: …\n" f"Resolution: …" )` | Builds **one text block** from three columns. Python automatically joins strings written next to each other inside `( )`. Result:<br>`Issue: Unexpected roaming charges`<br>`Description: Customer returned from a trip to Spain…`<br>`Resolution: …bundle was activated 3 hours after…`<br>Keeping the problem **and** its fix together is the whole point: a customer describing the problem will also bring back the solution. |
+| 33–41 | `docs.append(Document(...))` | Wraps the text in a Document and adds it to the list. |
+| 34 | `page_content=content` | The text to embed and search. |
+| 35–40 | `metadata={...}` | Labels: `source: "ticket"` (shows as `[TICKET]` in the AI's prompt), `ticket_id` (e.g. `TK-004`), `category` (e.g. `roaming`), and `status` (always `resolved` here). Notice `ticket_id`, `category` and `status` are **not** in the searchable text; they're kept only as labels. |
+| 42 | `return docs` | Returns 19 Documents. |
 
-**Part 6: Main program (lines 44–66)**
+**Part 6: Main program (lines 45–67)**
 
 This is **identical** to the FAQ script's main program; only the messages and the variable names differ:
 
 | Lines | What happens | Same as FAQ lines |
 |---|---|---|
-| 45–47 | Print progress, call `load_ticket_documents(TICKETS_DB_PATH)`, print `19 resolved tickets loaded.` | 29–31 |
-| 49–50 | Load the embedding model | 33–34 |
-| 52–56 | Open (or create) the `tickets` collection in `chroma_store/` | 36–40 |
-| 58–62 | Delete any existing tickets in the collection, so a re-run never duplicates | 42–46 |
-| 64–66 | Embed and save all 19 tickets, then print the final count | 48–50 |
+| 46–48 | Print progress, call `load_ticket_documents(TICKETS_DB_PATH)`, print `19 resolved tickets loaded.` | 30–32 |
+| 50–51 | Load the embedding model | 34–35 |
+| 53–57 | Open (or create) the `tickets` collection in `chroma_store/` | 37–41 |
+| 59–63 | Delete any existing tickets in the collection, so a re-run never duplicates | 43–47 |
+| 65–67 | Embed and save all 19 tickets, then print the final count | 49–51 |
 
-**Part 7: Start button (lines 69–70)**
+**Part 7: Start button (lines 70–71)**
 
 | Lines | What it does |
 |---|---|
-| 69–70 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
+| 70–71 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
 
 ---
 
@@ -952,7 +961,7 @@ Embedding and storing in Chroma collection 'guides'...
 
 #### Line-by-line walkthrough of `ingest_pdf.py`
 
-> Line numbers match [ingest_pdf.py](ingest_pdf.py). Unlike the other two scripts, this one has **no separate loading function**: everything happens inside `main()`. The **new** parts are the cleaning rules (lines 21–31), loading the PDF (lines 36–37), cleaning each page (lines 40–42), **chunking** (lines 44–50) and tagging the chunks (lines 52–55).
+> Line numbers match [ingest_pdf.py](ingest_pdf.py). Unlike the other two scripts, this one has **no separate loading function**: everything happens inside `main()`. The **new** parts are the cleaning rules (lines 22–32), loading the PDF (lines 37–38), cleaning each page (lines 41–43), **chunking** (lines 45–51) and tagging the chunks (lines 53–56).
 
 **Part 1: Description (lines 1–7)**
 
@@ -960,11 +969,12 @@ Embedding and storing in Chroma collection 'guides'...
 |---|---|
 | 1–7 | Docstring: loads `data/telecom_guide.pdf` into the `guides` collection, removes the repeated header/footer, splits it into chunks with `RecursiveCharacterTextSplitter`, and is safe to re-run. |
 
-**Part 2: Imports (lines 8–19)**
+**Part 2: Imports (lines 8–20)**
 
 ```python
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import re
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -980,13 +990,14 @@ from config import (
 | Line | Code | What it does |
 |---|---|---|
 | 8–9 | `import os` + verbosity setting | Same as the other scripts. |
-| 10 | `import re` | **New.** Python's built-in **regular expressions** tool, for finding text that follows a pattern (like "the word Page, a space, then any number"). Used to spot the header and footer lines. |
-| 12 | `from langchain_community.document_loaders import PyPDFLoader` | **New.** A ready-made tool that opens a PDF and pulls out its text, **one Document per page**. (It uses the `pypdf` library underneath.) |
-| 13 | `from langchain_text_splitters import RecursiveCharacterTextSplitter` | **New.** The **chunking** tool: it cuts long text into smaller pieces at sensible places. |
-| 14–15 | `Chroma`, `HuggingFaceEmbeddings` | Same as the other scripts. Note `Document` isn't imported here: the PDF loader creates Documents itself. |
-| 17–19 | `from config import ( … )` | Six settings from [config.py](config.py): the database folder, the embedding model, the `guides` collection name, the PDF's path, and the two **chunking settings** `CHUNK_SIZE` (600) and `CHUNK_OVERLAP` (100). The brackets `( )` simply let one import statement continue over several lines. |
+| 10 | `import sqlite_compat …` | The SQLite safety fix, same as in the other scripts. |
+| 11 | `import re` | **New.** Python's built-in **regular expressions** tool, for finding text that follows a pattern (like "the word Page, a space, then any number"). Used to spot the header and footer lines. |
+| 13 | `from langchain_community.document_loaders import PyPDFLoader` | **New.** A ready-made tool that opens a PDF and pulls out its text, **one Document per page**. (It uses the `pypdf` library underneath.) |
+| 14 | `from langchain_text_splitters import RecursiveCharacterTextSplitter` | **New.** The **chunking** tool: it cuts long text into smaller pieces at sensible places. |
+| 15–16 | `Chroma`, `HuggingFaceEmbeddings` | Same as the other scripts. Note `Document` isn't imported here: the PDF loader creates Documents itself. |
+| 18–20 | `from config import ( … )` | Six settings from [config.py](config.py): the database folder, the embedding model, the `guides` collection name, the PDF's path, and the two **chunking settings** `CHUNK_SIZE` (600) and `CHUNK_OVERLAP` (100). The brackets `( )` simply let one import statement continue over several lines. |
 
-**Part 3: The cleaning rules (lines 21–23)**
+**Part 3: The cleaning rules (lines 22–24)**
 
 ```python
 # Text printed on every page by data/generate_pdf.py; it carries no meaning, so it is removed
@@ -996,11 +1007,11 @@ FOOTER_PATTERN = re.compile(r"^Page \d+$")
 
 | Line | Code | What it does |
 |---|---|---|
-| 21 | `# Text printed on every page…` | Comment explaining why these patterns exist. |
-| 22 | `HEADER_PATTERN = re.compile(r"…")` | A pattern that matches **exactly** the header line. `re.compile` prepares the pattern once so it can be reused quickly. Pattern symbols: `^` = start of the line, `$` = end of the line (so only a line that is *nothing but* the header matches), `\s+` = one or more spaces (the PDF has two spaces before the dash, so this makes it tolerant). The `r` before the quotes means "raw text": backslashes are kept as they are. |
-| 23 | `FOOTER_PATTERN = re.compile(r"^Page \d+$")` | Matches lines like `Page 2` or `Page 10`. `\d+` = one or more digits. Because of `^` and `$`, a sentence that merely *contains* "page 2" is **not** removed, only a line that is exactly "Page" + a number. |
+| 22 | `# Text printed on every page…` | Comment explaining why these patterns exist. |
+| 23 | `HEADER_PATTERN = re.compile(r"…")` | A pattern that matches **exactly** the header line. `re.compile` prepares the pattern once so it can be reused quickly. Pattern symbols: `^` = start of the line, `$` = end of the line (so only a line that is *nothing but* the header matches), `\s+` = one or more spaces (the PDF has two spaces before the dash, so this makes it tolerant). The `r` before the quotes means "raw text": backslashes are kept as they are. |
+| 24 | `FOOTER_PATTERN = re.compile(r"^Page \d+$")` | Matches lines like `Page 2` or `Page 10`. `\d+` = one or more digits. Because of `^` and `$`, a sentence that merely *contains* "page 2" is **not** removed, only a line that is exactly "Page" + a number. |
 
-**Part 4: The cleaning function (lines 26–31)**
+**Part 4: The cleaning function (lines 27–32)**
 
 ```python
 def clean_page_text(text: str) -> str:
@@ -1013,11 +1024,11 @@ def clean_page_text(text: str) -> str:
 
 | Line | Code | What it does |
 |---|---|---|
-| 26 | `def clean_page_text(text: str) -> str:` | A function that takes one page's text and returns the cleaned text. |
-| 27–30 | `lines = [ … ]` | A **list comprehension**: a compact way to build a list by filtering another one. Read it as: *"for every line in the page, keep it **if** it's not the header **and** not a footer."* |
-| 28 | `line for line in text.splitlines()` | `splitlines()` cuts the page into individual lines. |
-| 29 | `if not HEADER_PATTERN.match(line.strip()) and not FOOTER_PATTERN.match(line.strip())` | The filter. `.strip()` removes spaces at the start and end of the line before checking, so stray spaces don't stop a match. |
-| 31 | `return "\n".join(lines).strip()` | Glues the kept lines back together with line breaks (blank lines between paragraphs are kept, so the chunker can still split at paragraph ends), and trims empty space at the very start and end. |
+| 27 | `def clean_page_text(text: str) -> str:` | A function that takes one page's text and returns the cleaned text. |
+| 28–31 | `lines = [ … ]` | A **list comprehension**: a compact way to build a list by filtering another one. Read it as: *"for every line in the page, keep it **if** it's not the header **and** not a footer."* |
+| 29 | `line for line in text.splitlines()` | `splitlines()` cuts the page into individual lines. |
+| 30 | `if not HEADER_PATTERN.match(line.strip()) and not FOOTER_PATTERN.match(line.strip())` | The filter. `.strip()` removes spaces at the start and end of the line before checking, so stray spaces don't stop a match. |
+| 32 | `return "\n".join(lines).strip()` | Glues the kept lines back together with line breaks (blank lines between paragraphs are kept, so the chunker can still split at paragraph ends), and trims empty space at the very start and end. |
 
 **Example:** the second page of the PDF, before and after cleaning:
 
@@ -1031,7 +1042,7 @@ bands to balance coverage and capacity.
 Page 2
 ```
 
-**Part 5: Loading the PDF (lines 34–38)**
+**Part 5: Loading the PDF (lines 35–39)**
 
 ```python
 def main():
@@ -1043,13 +1054,13 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 34 | `def main():` | Start of the main program. |
-| 35 | `print(...)` | Progress message. |
-| 36 | `loader = PyPDFLoader(str(GUIDE_PDF_PATH))` | Prepares a loader pointed at the PDF. Nothing is read yet. `str(...)` converts the path from `config.py` (a `Path` object) into plain text, which is what this loader expects. |
-| 37 | `pages = loader.load()` | **Reads the PDF.** Returns a list of 9 Documents, **one per page**. Each one's `page_content` is that page's text, and its `metadata` is filled in automatically, e.g. `{'source': '…/data/telecom_guide.pdf', 'page': 1, 'page_label': '2', 'total_pages': 9, 'producer': 'PyPDF', …}`. Note `page` counts from **0**, so the title page is `page: 0`. |
-| 38 | `print(f"  {len(pages)} pages loaded.")` | Prints `9 pages loaded.` |
+| 35 | `def main():` | Start of the main program. |
+| 36 | `print(...)` | Progress message. |
+| 37 | `loader = PyPDFLoader(str(GUIDE_PDF_PATH))` | Prepares a loader pointed at the PDF. Nothing is read yet. `str(...)` converts the path from `config.py` (a `Path` object) into plain text, which is what this loader expects. |
+| 38 | `pages = loader.load()` | **Reads the PDF.** Returns a list of 9 Documents, **one per page**. Each one's `page_content` is that page's text, and its `metadata` is filled in automatically, e.g. `{'source': '…/data/telecom_guide.pdf', 'page': 1, 'page_label': '2', 'total_pages': 9, 'producer': 'PyPDF', …}`. Note `page` counts from **0**, so the title page is `page: 0`. |
+| 39 | `print(f"  {len(pages)} pages loaded.")` | Prints `9 pages loaded.` |
 
-**Part 6: Cleaning each page (lines 40–42)**
+**Part 6: Cleaning each page (lines 41–43)**
 
 ```python
     print("Removing page headers and footers...")
@@ -1059,11 +1070,11 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 40 | `print(...)` | Progress message. |
-| 41 | `for page in pages:` | Go through the 9 pages one by one. |
-| 42 | `page.page_content = clean_page_text(page.page_content)` | Replaces each page's text with its cleaned version. The page's metadata (page number etc.) is untouched. This happens **before** chunking, so no chunk ever contains the header or footer. |
+| 41 | `print(...)` | Progress message. |
+| 42 | `for page in pages:` | Go through the 9 pages one by one. |
+| 43 | `page.page_content = clean_page_text(page.page_content)` | Replaces each page's text with its cleaned version. The page's metadata (page number etc.) is untouched. This happens **before** chunking, so no chunk ever contains the header or footer. |
 
-**Part 7: Chunking (lines 44–50)**
+**Part 7: Chunking (lines 45–51)**
 
 ```python
     print(f"Chunking (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
@@ -1077,14 +1088,14 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 44 | `print(...)` | Prints `Chunking (size=600, overlap=100)...` |
-| 45–49 | `splitter = RecursiveCharacterTextSplitter(...)` | Creates the chunking tool with our rules. Nothing is cut yet. |
-| 46 | `chunk_size=CHUNK_SIZE` | Each chunk at most 600 characters. |
-| 47 | `chunk_overlap=CHUNK_OVERLAP` | Up to 100 characters of overlap. |
-| 48 | `separators=["\n\n", "\n", ".", " "]` | **Where it's allowed to cut, in order of preference:** a blank line (end of paragraph), then a line break, then a full stop, then a space. "Recursive" means: try the first; if a piece is still too long, try the next one on that piece, and so on. |
-| 50 | `chunks = splitter.split_documents(pages)` | **Does the cutting.** Each page is split separately, so a chunk never crosses two pages. Each chunk **inherits** its page's metadata (`page`, `source`, …). Result: 36 chunks from 9 pages. |
+| 45 | `print(...)` | Prints `Chunking (size=600, overlap=100)...` |
+| 46–50 | `splitter = RecursiveCharacterTextSplitter(...)` | Creates the chunking tool with our rules. Nothing is cut yet. |
+| 47 | `chunk_size=CHUNK_SIZE` | Each chunk at most 600 characters. |
+| 48 | `chunk_overlap=CHUNK_OVERLAP` | Up to 100 characters of overlap. |
+| 49 | `separators=["\n\n", "\n", ".", " "]` | **Where it's allowed to cut, in order of preference:** a blank line (end of paragraph), then a line break, then a full stop, then a space. "Recursive" means: try the first; if a piece is still too long, try the next one on that piece, and so on. |
+| 51 | `chunks = splitter.split_documents(pages)` | **Does the cutting.** Each page is split separately, so a chunk never crosses two pages. Each chunk **inherits** its page's metadata (`page`, `source`, …). Result: 36 chunks from 9 pages. |
 
-**Part 8: Labelling the chunks (lines 52–57)**
+**Part 8: Labelling the chunks (lines 53–58)**
 
 ```python
     # Tag each chunk so we know it came from the guide
@@ -1097,28 +1108,28 @@ def main():
 
 | Line | Code | What it does |
 |---|---|---|
-| 52 | `# Tag each chunk…` | Comment. |
-| 53 | `for i, chunk in enumerate(chunks):` | Loops over the chunks. `enumerate` also gives a running number `i` (0, 1, 2, …). |
-| 54 | `chunk.metadata["source"] = "guide"` | **Overwrites** the loader's `source` (which was the PDF's file path) with the simple label `"guide"`. This matches the other collections' style (`faq`, `ticket`) and is what shows as `[GUIDE]` in the AI's prompt. |
-| 55 | `chunk.metadata["chunk_index"] = i` | Gives each chunk its position number (0–35), so you can tell which chunks were neighbours in the original document. |
-| 57 | `print(...)` | Prints `36 chunks produced.` |
+| 53 | `# Tag each chunk…` | Comment. |
+| 54 | `for i, chunk in enumerate(chunks):` | Loops over the chunks. `enumerate` also gives a running number `i` (0, 1, 2, …). |
+| 55 | `chunk.metadata["source"] = "guide"` | **Overwrites** the loader's `source` (which was the PDF's file path) with the simple label `"guide"`. This matches the other collections' style (`faq`, `ticket`) and is what shows as `[GUIDE]` in the AI's prompt. |
+| 56 | `chunk.metadata["chunk_index"] = i` | Gives each chunk its position number (0–35), so you can tell which chunks were neighbours in the original document. |
+| 58 | `print(...)` | Prints `36 chunks produced.` |
 
-**Part 9: Embedding and saving (lines 59–76)**
+**Part 9: Embedding and saving (lines 60–77)**
 
-Identical to the FAQ script's lines 33–50; only the collection name is `GUIDES_COLLECTION` and the list being saved is called `chunks` instead of `docs`:
+Identical to the FAQ script's lines 34–51; only the collection name is `GUIDES_COLLECTION` and the list being saved is called `chunks` instead of `docs`:
 
 | Lines | What happens | Same as FAQ lines |
 |---|---|---|
-| 59–60 | Load the embedding model | 33–34 |
-| 62–66 | Open (or create) the `guides` collection in `chroma_store/` | 36–40 |
-| 68–72 | Delete any existing chunks in the collection, so a re-run never duplicates | 42–46 |
-| 74–76 | `vectorstore.add_documents(chunks)`: embed all 36 chunks into vectors and save them, then print the final count | 48–50 |
+| 60–61 | Load the embedding model | 34–35 |
+| 63–67 | Open (or create) the `guides` collection in `chroma_store/` | 37–41 |
+| 69–73 | Delete any existing chunks in the collection, so a re-run never duplicates | 43–47 |
+| 75–77 | `vectorstore.add_documents(chunks)`: embed all 36 chunks into vectors and save them, then print the final count | 49–51 |
 
-**Part 10: Start button (lines 79–80)**
+**Part 10: Start button (lines 80–81)**
 
 | Lines | What it does |
 |---|---|
-| 79–80 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
+| 80–81 | `if __name__ == "__main__": main()`: run `main()` only when the file is run directly. |
 
 #### The three ingest scripts side by side
 
@@ -1180,9 +1191,10 @@ Builds a merged retriever across all three Chroma collections:
 |---|---|
 | 1–6 | Docstring: says this file builds **one combined search** across the three collections, and reminds the reader how each collection was chunked. |
 
-**Part 2: Imports (lines 7–10)**
+**Part 2: Imports (lines 7–11)**
 
 ```python
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import RunnableLambda
@@ -1191,14 +1203,15 @@ from langchain_core.documents import Document
 
 | Line | Code | What it does |
 |---|---|---|
-| 7 | `from langchain_chroma import Chroma` | Connector to the ChromaDB vector database. |
-| 8 | `from langchain_huggingface import HuggingFaceEmbeddings` | The embedding model tool. It's needed here too, because the **customer's question** must be turned into 384 numbers before it can be compared with the stored vectors. |
-| 9 | `from langchain_core.runnables import RunnableLambda` | **New.** A wrapper that turns an ordinary Python function into a LangChain "**Runnable**": a building block that can be chained with others using the `\|` symbol in [rag_chain.py](rag_chain.py). |
-| 10 | `from langchain_core.documents import Document` | The Document type. Here it's used only in a type hint (line 46), to say the function returns a list of Documents. |
+| 7 | `import sqlite_compat …` | The SQLite safety fix ([section 5.12](#512-sqlite_compatpy--the-sqlite-safety-fix)). It must come before line 8, which loads ChromaDB. |
+| 8 | `from langchain_chroma import Chroma` | Connector to the ChromaDB vector database. |
+| 9 | `from langchain_huggingface import HuggingFaceEmbeddings` | The embedding model tool. It's needed here too, because the **customer's question** must be turned into 384 numbers before it can be compared with the stored vectors. |
+| 10 | `from langchain_core.runnables import RunnableLambda` | **New.** A wrapper that turns an ordinary Python function into a LangChain "**Runnable**": a building block that can be chained with others using the `\|` symbol in [rag_chain.py](rag_chain.py). |
+| 11 | `from langchain_core.documents import Document` | The Document type. Here it's used only in a type hint (line 47), to say the function returns a list of Documents. |
 
 Notice this file does **not** set `TRANSFORMERS_VERBOSITY`. It doesn't need to, because `app.py` and `main.py` set it before importing this file.
 
-**Part 3: Settings, borrowed from `config.py` (lines 12–16)**
+**Part 3: Settings, borrowed from `config.py` (lines 13–17)**
 
 ```python
 from config import (
@@ -1210,12 +1223,12 @@ from config import (
 
 | Line | Code | What it does |
 |---|---|---|
-| 12–16 | `from config import ( … )` | Brings in eight settings from [config.py](config.py). The brackets let the import continue over several lines. |
-| 13 | `CHROMA_DIR`, `EMBED_MODEL` | Where to find the database, and which embedding model to use for questions. Both come from the **same place** the ingest scripts use, so the folder is always the one they wrote to, and the model always matches. (If the models differed, the question's numbers and the stored numbers wouldn't be comparable, and search would quietly return poor results with **no error message**. Keeping it in `config.py` prevents that.) |
-| 14 | `FAQ_COLLECTION`, `TICKETS_COLLECTION`, `GUIDES_COLLECTION` | The three collection names: `"faq"`, `"tickets"`, `"guides"`. |
-| 15 | `K_FAQ`, `K_TICKETS`, `K_GUIDES` | How many results to fetch from each collection (3 each). |
+| 13–17 | `from config import ( … )` | Brings in eight settings from [config.py](config.py). The brackets let the import continue over several lines. |
+| 14 | `CHROMA_DIR`, `EMBED_MODEL` | Where to find the database, and which embedding model to use for questions. Both come from the **same place** the ingest scripts use, so the folder is always the one they wrote to, and the model always matches. (If the models differed, the question's numbers and the stored numbers wouldn't be comparable, and search would quietly return poor results with **no error message**. Keeping it in `config.py` prevents that.) |
+| 15 | `FAQ_COLLECTION`, `TICKETS_COLLECTION`, `GUIDES_COLLECTION` | The three collection names: `"faq"`, `"tickets"`, `"guides"`. |
+| 16 | `K_FAQ`, `K_TICKETS`, `K_GUIDES` | How many results to fetch from each collection (3 each). |
 
-**Part 4: The function header and its settings (lines 19–23)**
+**Part 4: The function header and its settings (lines 20–24)**
 
 ```python
 def build_retriever(
@@ -1227,13 +1240,13 @@ def build_retriever(
 
 | Line | Code | What it does |
 |---|---|---|
-| 19 | `def build_retriever(` | Defines the main function. It doesn't search anything itself; it **builds and returns** a search tool. |
-| 20 | `k_faq: int = K_FAQ` | How many FAQ results to return per question. `= K_FAQ` sets the **default value** (3, from `config.py`): used unless the caller asks for a different number, e.g. `build_retriever(k_faq=5)`. |
-| 21 | `k_tickets: int = K_TICKETS` | How many ticket results (default 3). |
-| 22 | `k_guides: int = K_GUIDES` | How many PDF-chunk results (default 3). |
-| 23 | `) -> RunnableLambda:` | Type hint: the function returns a `RunnableLambda` (a pluggable search block). |
+| 20 | `def build_retriever(` | Defines the main function. It doesn't search anything itself; it **builds and returns** a search tool. |
+| 21 | `k_faq: int = K_FAQ` | How many FAQ results to return per question. `= K_FAQ` sets the **default value** (3, from `config.py`): used unless the caller asks for a different number, e.g. `build_retriever(k_faq=5)`. |
+| 22 | `k_tickets: int = K_TICKETS` | How many ticket results (default 3). |
+| 23 | `k_guides: int = K_GUIDES` | How many PDF-chunk results (default 3). |
+| 24 | `) -> RunnableLambda:` | Type hint: the function returns a `RunnableLambda` (a pluggable search block). |
 
-**Part 5: Load the embedding model (line 24)**
+**Part 5: Load the embedding model (line 25)**
 
 ```python
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
@@ -1241,9 +1254,9 @@ def build_retriever(
 
 | Line | What it does |
 |---|---|
-| 24 | Loads the MiniLM model from your computer's cache. It's loaded **once** and shared by all three collections below, which saves memory and time. |
+| 25 | Loads the MiniLM model from your computer's cache. It's loaded **once** and shared by all three collections below, which saves memory and time. |
 
-**Part 6: Open the three collections (lines 26–40)**
+**Part 6: Open the three collections (lines 27–41)**
 
 ```python
     faq_store = Chroma(
@@ -1257,15 +1270,15 @@ def build_retriever(
 
 | Lines | Code | What it does |
 |---|---|---|
-| 26–30 | `faq_store = Chroma(collection_name=FAQ_COLLECTION, ...)` | Opens the `faq` collection. |
-| 31–35 | `tickets_store = Chroma(collection_name=TICKETS_COLLECTION, ...)` | Opens the `tickets` collection. |
-| 36–40 | `guides_store = Chroma(collection_name=GUIDES_COLLECTION, ...)` | Opens the `guides` collection. |
+| 27–31 | `faq_store = Chroma(collection_name=FAQ_COLLECTION, ...)` | Opens the `faq` collection. |
+| 32–36 | `tickets_store = Chroma(collection_name=TICKETS_COLLECTION, ...)` | Opens the `tickets` collection. |
+| 37–41 | `guides_store = Chroma(collection_name=GUIDES_COLLECTION, ...)` | Opens the `guides` collection. |
 | each | `embedding_function=embeddings` | Tells each collection to use the shared model to turn questions into vectors. |
 | each | `persist_directory=CHROMA_DIR` | Read from `chroma_store/` on disk. |
 
 ⚠️ If you haven't run the ingest scripts yet, Chroma doesn't complain. It quietly **creates empty collections**, so every search returns nothing and the bot answers "I don't have enough information". That's why the ingest scripts must be run first.
 
-**Part 7: Turn each collection into a "retriever" (lines 42–44)**
+**Part 7: Turn each collection into a "retriever" (lines 43–45)**
 
 ```python
     faq_retriever     = faq_store.as_retriever(search_kwargs={"k": k_faq})
@@ -1275,9 +1288,9 @@ def build_retriever(
 
 | Line | Code | What it does |
 |---|---|---|
-| 42 | `faq_store.as_retriever(search_kwargs={"k": k_faq})` | Wraps the FAQ collection in a **retriever**: a simple object with one job, *"give me a question, I'll give back the k most similar documents"*. `search_kwargs` passes search settings; here, `k = 3`. |
-| 43 | `tickets_retriever = ...` | Same for tickets. |
-| 44 | `guides_retriever = ...` | Same for PDF chunks. |
+| 43 | `faq_store.as_retriever(search_kwargs={"k": k_faq})` | Wraps the FAQ collection in a **retriever**: a simple object with one job, *"give me a question, I'll give back the k most similar documents"*. `search_kwargs` passes search settings; here, `k = 3`. |
+| 44 | `tickets_retriever = ...` | Same for tickets. |
+| 45 | `guides_retriever = ...` | Same for PDF chunks. |
 
 The extra spaces before `=` on these lines are just to line them up neatly; Python ignores them.
 
@@ -1291,7 +1304,7 @@ The extra spaces before `=` on these lines are just to line them up neatly; Pyth
 
 This shows an important limitation: **the retriever always returns exactly k results, even when some are weak matches.** There's no "only if it's similar enough" cut-off. The AI then has to ignore the irrelevant ones, which is one reason the prompt tells it to answer from the context *only when it's sufficient*.
 
-**Part 8: The search function itself (lines 46–51)**
+**Part 8: The search function itself (lines 47–52)**
 
 ```python
     def retrieve(query: str) -> list[Document]:
@@ -1304,16 +1317,16 @@ This shows an important limitation: **the retriever always returns exactly k res
 
 | Line | Code | What it does |
 |---|---|---|
-| 46 | `def retrieve(query: str) -> list[Document]:` | Defines the function that does the actual searching. It takes the customer's question (text) and returns a list of Documents. It's defined **inside** `build_retriever`, so it can use the three retrievers created above. (A function that remembers variables from the function around it is called a **closure**.) |
-| 47 | `return (` | Return the result of the expression in brackets. |
-| 48 | `faq_retriever.invoke(query)` | **Runs the FAQ search.** `.invoke()` is LangChain's standard "run this" command. Behind the scenes: turn the question into 384 numbers → find the 3 nearest FAQ vectors → return them as Documents (text + metadata). |
-| 49 | `+ tickets_retriever.invoke(query)` | Runs the ticket search and **joins** its 3 results onto the list (`+` on two lists sticks them together). |
-| 50 | `+ guides_retriever.invoke(query)` | Runs the guide search and joins its 3 results. |
-| 51 | `)` | Final result: **one list of 9 Documents**, always in the order FAQ ×3 → tickets ×3 → guides ×3. |
+| 47 | `def retrieve(query: str) -> list[Document]:` | Defines the function that does the actual searching. It takes the customer's question (text) and returns a list of Documents. It's defined **inside** `build_retriever`, so it can use the three retrievers created above. (A function that remembers variables from the function around it is called a **closure**.) |
+| 48 | `return (` | Return the result of the expression in brackets. |
+| 49 | `faq_retriever.invoke(query)` | **Runs the FAQ search.** `.invoke()` is LangChain's standard "run this" command. Behind the scenes: turn the question into 384 numbers → find the 3 nearest FAQ vectors → return them as Documents (text + metadata). |
+| 50 | `+ tickets_retriever.invoke(query)` | Runs the ticket search and **joins** its 3 results onto the list (`+` on two lists sticks them together). |
+| 51 | `+ guides_retriever.invoke(query)` | Runs the guide search and joins its 3 results. |
+| 52 | `)` | Final result: **one list of 9 Documents**, always in the order FAQ ×3 → tickets ×3 → guides ×3. |
 
 The three searches run **one after another**, not at the same time. Each one also converts the question into numbers **separately**, so the same question is embedded 3 times. With a small local model this takes only milliseconds, but it's an easy optimisation if the project grows.
 
-**Part 9: Return the finished search tool (line 53)**
+**Part 9: Return the finished search tool (line 54)**
 
 ```python
     return RunnableLambda(retrieve)
@@ -1321,7 +1334,7 @@ The three searches run **one after another**, not at the same time. Each one als
 
 | Line | What it does |
 |---|---|
-| 53 | Wraps `retrieve` in a `RunnableLambda` and hands it back. Now it can be dropped into the LangChain pipeline in [rag_chain.py](rag_chain.py) like any other building block: `retriever \| _format_docs`. It also gains standard methods such as `.invoke(question)`. |
+| 54 | Wraps `retrieve` in a `RunnableLambda` and hands it back. Now it can be dropped into the LangChain pipeline in [rag_chain.py](rag_chain.py) like any other building block: `retriever \| _format_docs`. It also gains standard methods such as `.invoke(question)`. |
 
 #### How `retriever.py` is used
 
@@ -1658,7 +1671,7 @@ response = st.write_stream(chain.stream(question))
 ```
 
 ```python
-# ③ retriever.py, lines 46–51: the question arrives here as `query`
+# ③ retriever.py, lines 47–52: the question arrives here as `query`
 def retrieve(query: str) -> list[Document]:
     return (
         faq_retriever.invoke(query)
@@ -1808,8 +1821,10 @@ Then open http://localhost:8501.
 
 **How it works, step by step**
 
-1. Hides noisy library warnings (`TRANSFORMERS_VERBOSITY=error`) and loads API keys from `.env`.
-2. `get_chain()` builds the RAG chain **once** and caches it (`@st.cache_resource`) — so the embedding model isn't reloaded on every message.
+1. Hides noisy library warnings (`TRANSFORMERS_VERBOSITY=error`), applies the SQLite safety fix (`import sqlite_compat`, see [5.12](#512-sqlite_compatpy--the-sqlite-safety-fix)), and loads API keys from `.env`.
+2. `get_chain()` runs **once** and is cached (`@st.cache_resource`), so the embedding model isn't reloaded on every message. It:
+   - calls `ensure_vector_store()` ([5.11](#511-setup_vector_storepy--builds-the-database-automatically)), which builds any empty collection. On a brand-new server this takes about a minute, and the page shows *"Preparing the knowledge base (first start only)…"* meanwhile;
+   - then builds the RAG chain with `build_chain()`.
 3. Uses `st.session_state` to remember:
    - `messages` — the chat history shown on screen
    - `pending_question` — a question chosen by clicking a sample button
@@ -1832,8 +1847,9 @@ python main.py
 
 **How it works**
 
-1. Loads API keys and builds the chain once.
-2. Loops forever:
+1. Loads API keys, applies the SQLite safety fix, and calls `ensure_vector_store()` to build any empty collection.
+2. Builds the chain once.
+3. Loops forever:
    - Shows `Customer: ` and waits for input.
    - Ignores empty lines.
    - Exits on `quit`, `exit` or `q`.
@@ -1854,6 +1870,155 @@ Goodbye!
 
 ---
 
+### 5.11 `setup_vector_store.py` — builds the database automatically
+
+**In plain words:** A safety check that runs when the chatbot starts. It looks at the vector database, and if any of the three collections is missing or empty, it runs that collection's ingest script **once**, automatically. After that, startup is instant.
+
+**Why it exists:** `chroma_store/` is git-ignored, so when the project is put on a new computer or a **web server**, the database doesn't come with it. Without this check, the bot would start with an empty database and answer "I don't have enough information" to every question until someone remembered to run the three ingest scripts by hand. Now the app builds what's missing on its own.
+
+**When it runs:**
+
+| Situation | What happens |
+|---|---|
+| `app.py`: first question after the server starts | Checks the database; builds any empty collection (about a minute the very first time), then answers |
+| `main.py`: on start | Same check before the first `Customer:` prompt |
+| Run by hand: `python setup_vector_store.py` | Same check, then prints `Vector store is ready.` A handy one-command alternative to running the three ingest scripts |
+| Database already complete | Nothing is rebuilt; the check takes a fraction of a second |
+
+**Real output on a fresh setup (no `chroma_store/` folder):**
+
+```
+Collection 'faq' is empty, building it now...
+Loading FAQ documents...
+  25 FAQ entries loaded.
+...
+Collection 'tickets' is empty, building it now...
+...
+Collection 'guides' is empty, building it now...
+...
+  Done. 36 vectors stored.
+```
+
+> It only fills **empty** collections. If you *changed* the data (e.g. edited `faq.csv`), the collection isn't empty, so nothing happens: run that ingest script yourself, as before.
+
+#### Line-by-line walkthrough of `setup_vector_store.py`
+
+> Line numbers match [setup_vector_store.py](setup_vector_store.py).
+
+**Part 1: Description (lines 1–8)**
+
+| Line | What it does |
+|---|---|
+| 1–8 | Docstring: explains why the check is needed (`chroma_store/` isn't in git), who calls it, and how to run it by hand. |
+
+**Part 2: Imports (lines 9–15)**
+
+```python
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
+import chromadb
+
+import ingest_faq
+import ingest_tickets
+import ingest_pdf
+from config import CHROMA_DIR, FAQ_COLLECTION, TICKETS_COLLECTION, GUIDES_COLLECTION
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 9 | `import sqlite_compat …` | The SQLite safety fix ([section 5.12](#512-sqlite_compatpy--the-sqlite-safety-fix)); must come before ChromaDB is loaded on the next line. |
+| 10 | `import chromadb` | ChromaDB itself, used **directly** here (not through LangChain), because we only need to ask "how many items are in each collection?" |
+| 12–14 | `import ingest_faq` … `import ingest_pdf` | Loads the three ingest scripts **as modules**, so their `main()` functions can be called from here. Because of the `if __name__ == "__main__":` line at the bottom of each, importing them does **not** start an ingest; it only makes their functions available. |
+| 15 | `from config import …` | The database folder and the three collection names. |
+
+**Part 3: Which script fills which collection (lines 17–21)**
+
+```python
+INGESTERS = {
+    FAQ_COLLECTION: ingest_faq.main,
+    TICKETS_COLLECTION: ingest_tickets.main,
+    GUIDES_COLLECTION: ingest_pdf.main,
+}
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 17–21 | `INGESTERS = { … }` | A **dictionary** (a lookup table) pairing each collection name with the function that builds it: `"faq"` → `ingest_faq.main`, and so on. Note there are **no brackets** after `main`: we're storing the function itself, to call later, not calling it now. |
+
+**Part 4: The check (lines 24–31)**
+
+```python
+def ensure_vector_store() -> None:
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    sizes = {collection.name: collection.count() for collection in client.list_collections()}
+
+    for name, ingest in INGESTERS.items():
+        if sizes.get(name, 0) == 0:
+            print(f"Collection '{name}' is empty, building it now...")
+            ingest()
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 24 | `def ensure_vector_store() -> None:` | The function `app.py` and `main.py` call. `-> None` means it doesn't return anything; its job is the side effect of filling the database. |
+| 25 | `client = chromadb.PersistentClient(path=CHROMA_DIR)` | Opens the database folder. If `chroma_store/` doesn't exist yet, ChromaDB creates it. |
+| 26 | `sizes = {collection.name: collection.count() for …}` | Builds a lookup of **how many items each existing collection holds**, e.g. `{'faq': 25, 'tickets': 19, 'guides': 36}`. On a fresh server this is just `{}`. (This compact `{… for …}` form is a **dictionary comprehension**.) |
+| 28 | `for name, ingest in INGESTERS.items():` | Goes through the three collections one by one, getting each name and its ingest function. |
+| 29 | `if sizes.get(name, 0) == 0:` | `.get(name, 0)` returns the collection's size, or `0` if it doesn't exist. So this is true for both **missing** and **empty** collections. (An empty collection can exist if the app was started once before ingesting, because ChromaDB quietly creates empty collections when they're opened.) |
+| 30 | `print(...)` | Says which collection is being built. |
+| 31 | `ingest()` | Calls that collection's ingest function, e.g. `ingest_faq.main()`: exactly the same as running `python ingest_faq.py`. |
+
+**Part 5: Running it by hand (lines 34–36)**
+
+| Line | What it does |
+|---|---|
+| 34–36 | When run directly (`python setup_vector_store.py`), do the check and print `Vector store is ready.` |
+
+---
+
+### 5.12 `sqlite_compat.py` — the SQLite safety fix
+
+**In plain words:** A tiny file that protects against one specific server problem. ChromaDB stores its data using **SQLite** (a small database engine built into Python), and it needs **version 3.35 or newer**. Some older Linux servers come with an older SQLite, and on those ChromaDB refuses to start with an error like *"Your system has an unsupported version of sqlite3"*. This file checks the version and, **only if it's too old**, swaps in a newer SQLite that comes with the `pysqlite3-binary` package.
+
+| Where it runs | SQLite version | What this file does |
+|---|---|---|
+| Your Windows PC | 3.50 | Nothing |
+| Most modern servers | 3.40+ | Nothing |
+| An old Linux server | e.g. 3.31 | Swaps in the newer SQLite from `pysqlite3-binary` |
+
+`pysqlite3-binary` is listed in `pyproject.toml` and `requirements.txt` for **Linux only**, because that's the only place it's ever needed (and the only place it has ready-made installs).
+
+**Where it's imported:** at the top of every file that loads ChromaDB (the three ingest scripts, `retriever.py`, `setup_vector_store.py`) and of the two entry points (`app.py`, `main.py`). It must always come **before** ChromaDB is loaded, because ChromaDB checks the SQLite version the moment it starts.
+
+#### Line-by-line walkthrough of `sqlite_compat.py`
+
+> Line numbers match [sqlite_compat.py](sqlite_compat.py).
+
+```python
+import sqlite3
+import sys
+
+MIN_SQLITE_VERSION = (3, 35, 0)
+
+if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
+    import pysqlite3
+
+    sys.modules["sqlite3"] = pysqlite3
+```
+
+| Line | Code | What it does |
+|---|---|---|
+| 1–7 | Docstring | Explains the problem, the fix, and the rule "import this before ChromaDB". |
+| 8 | `import sqlite3` | Loads Python's built-in SQLite, to check its version. |
+| 9 | `import sys` | Loads Python's "system" toolkit. Here we need `sys.modules`: Python's list of **already-loaded modules**. |
+| 11 | `MIN_SQLITE_VERSION = (3, 35, 0)` | The oldest version ChromaDB accepts, written as (major, minor, patch). |
+| 13 | `if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:` | Compares the real version, e.g. `(3, 50, 4)`, with the minimum. Python compares these number by number, so `(3, 31, 1) < (3, 35, 0)` is true and `(3, 50, 4) < (3, 35, 0)` is false. |
+| 14 | `import pysqlite3` | Only on an old server: loads the newer SQLite from `pysqlite3-binary`. |
+| 16 | `sys.modules["sqlite3"] = pysqlite3` | **The swap.** It tells Python: "from now on, whenever any code asks for `sqlite3`, hand it `pysqlite3` instead." When ChromaDB loads a moment later and asks for `sqlite3`, it gets the newer version without knowing anything changed. |
+
+**Why `# noqa: F401` appears on every import of it:** the scripts never *use* anything from `sqlite_compat` by name. Importing it is enough, because its code runs once on import. Code checkers would flag it as an "unused import" (rule F401); `# noqa: F401` tells them it's on purpose.
+
+---
+
 ## 6. Data files
 
 | File | Format | Contents | Created by |
@@ -1871,8 +2036,9 @@ Goodbye!
 |---|---|
 | `.env` | Your private keys. **Never commit or share this.** |
 | `.env.example` | Template — copy it to `.env` and fill in values |
-| `pyproject.toml` | Project name, Python version (3.11+), and list of libraries |
+| `pyproject.toml` | Project name, Python version (3.11+), and list of libraries. Also pins PyTorch to the **CPU-only** build (`[tool.uv.sources]`) |
 | `uv.lock` | Exact versions of every library, so everyone installs the same thing |
+| `requirements.txt` | The same exact versions, in the classic format that `pip` and most hosting platforms read. Generated from `uv.lock` with `uv export`. Its first line points `pip` to PyTorch's CPU-only downloads; `uv export` doesn't write that line, so **add it back** whenever you regenerate the file |
 | `.gitignore` | Tells git which files to never upload (e.g. `.env`, `.venv/`, `chroma_store/`) |
 | `config.py` | The project's **own settings**: paths, collection names, embedding and AI model, chunk size, results per collection. See [section 5.3](#53-configpy--the-settings-file) |
 | `LICENSE` | The MIT licence: anyone may use, copy and modify the code, as long as they keep the copyright notice. Without a licence file, others legally can't reuse public code |
@@ -1914,7 +2080,8 @@ Hardly. The model is small (about 88 MB) and is downloaded only **once**. After 
 | `langchain`, `langchain-core` | Pipeline framework |
 | `langchain-groq` | Connects LangChain to Groq's AI |
 | `langchain-chroma`, `chromadb` | Vector database |
-| `langchain-huggingface`, `sentence-transformers`, `torchvision` | Embedding model |
+| `langchain-huggingface`, `sentence-transformers`, `torch` | Embedding model. `torch` (PyTorch) is pinned to the small **CPU-only** build, since the GPU build adds several GB this app never uses |
+| `pysqlite3-binary` | A newer SQLite, installed **on Linux servers only**, used by `sqlite_compat.py` if the server's own SQLite is too old for ChromaDB |
 | `langchain-community`, `pypdf` | PDF loading |
 | `langchain-text-splitters` | Chunking |
 | `pandas` | Reading the CSV |
@@ -1927,16 +2094,16 @@ Hardly. The model is small (about 88 MB) and is downloaded only **once**. After 
 ## 8. How to run it (step by step)
 
 ```bash
-# 1. Install libraries
-uv sync                      # or: pip install -e .
+# 1. Install libraries (any one of these)
+uv sync
+pip install -r requirements.txt
+pip install -e .
 
 # 2. Add your keys
 cp .env.example .env         # then edit .env
 
-# 3. Build the knowledge base (one time)
-python ingest_faq.py
-python ingest_tickets.py
-python ingest_pdf.py
+# 3. Build the knowledge base (optional: the app does this automatically on first start)
+python setup_vector_store.py
 
 # 4. Chat!
 streamlit run app.py         # website
@@ -1993,9 +2160,10 @@ python main.py               # terminal
 
 | Problem | Likely cause | Fix |
 |---|---|---|
-| Bot says it doesn't have enough information for everything | `chroma_store/` is empty or missing | Run the three ingest scripts |
+| Bot says it doesn't have enough information for everything | `chroma_store/` is empty or missing | Normally fixed automatically on start-up. If it persists, run `python setup_vector_store.py` and restart the app |
 | `GROQ_API_KEY` / authentication error | `.env` missing or wrong key | Check `.env` exists and the key is valid |
-| Very slow first start | Embedding model downloading | Wait; it's cached after the first run |
+| Very slow first start (or first question) | Embedding model downloading and/or the database being built for the first time | Wait (about a minute); both are kept for next time |
+| `unsupported version of sqlite3` from ChromaDB | Old SQLite on a Linux server, and `pysqlite3-binary` isn't installed | Install from `requirements.txt` (it includes `pysqlite3-binary` on Linux) |
 | Same snippet appears several times in answers | Database was built with an older version of the ingest scripts, which added copies on every run | Delete `chroma_store/` and run the three ingest scripts once (current scripts no longer duplicate) |
 | Changes to data not reflected in the website | Chain is cached | Re-ingest, then stop and restart `streamlit run app.py` |
 | `ModuleNotFoundError` | Libraries not installed / wrong environment | Run `uv sync` and activate `.venv` |

@@ -5,8 +5,10 @@ Usage: python main.py
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 from dotenv import load_dotenv
 from rag_chain import build_chain
+from setup_vector_store import ensure_vector_store
 
 load_dotenv()
 
@@ -15,6 +17,7 @@ def main():
     print("=== Telecom Customer Care Chatbot (RAG) ===")
     print("Type your question and press Enter. Type 'quit' to exit.\n")
 
+    ensure_vector_store()
     chain = build_chain()
 
     while True:

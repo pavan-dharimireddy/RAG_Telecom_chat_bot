@@ -5,6 +5,7 @@ Run whenever the CSV changes: python ingest_faq.py
 """
 import os
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 import pandas as pd
 from langchain_core.documents import Document
 from langchain_chroma import Chroma

@@ -4,6 +4,7 @@ Builds a merged retriever across all three Chroma collections:
   - tickets : resolved support tickets (no chunking — 1 ticket = 1 doc)
   - guides  : PDF guide chunks (RecursiveCharacterTextSplitter applied at ingest)
 """
+import sqlite_compat  # noqa: F401  (must come before chromadb is imported)
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import RunnableLambda
