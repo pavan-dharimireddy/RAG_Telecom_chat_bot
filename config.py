@@ -33,5 +33,7 @@ K_TICKETS = 3
 K_GUIDES  = 3
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
-LLM_MODEL       = "qwen/qwen3.8-27b"
+# Previous provider: Qwen on Groq (Groq returns "403 Access denied" from Streamlit Community Cloud)
+# LLM_MODEL       = "qwen/qwen3.8-27b"
+LLM_MODEL       = "gemini-3.5-flash"
 LLM_TEMPERATURE = 0

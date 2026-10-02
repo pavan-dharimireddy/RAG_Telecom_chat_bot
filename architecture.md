@@ -48,7 +48,7 @@ flowchart LR
         RET["retriever.py<br/>Merged Retriever"]
     end
 
-    LLM["☁️ LLM<br/>Qwen3.8-27B on Groq"]
+    LLM["☁️ LLM<br/>Gemini 3.5 Flash (Google)"]
     USER(("👤 Customer"))
 
     CSV --> IF --> C1
@@ -80,7 +80,7 @@ flowchart TB
     L4["<b>Storage Layer</b><br/>ChromaDB (chroma_store/)<br/><i>Persists vectors + text + metadata</i>"]
     L5["<b>Ingestion Layer</b><br/>ingest_faq.py · ingest_tickets.py · ingest_pdf.py<br/>setup_vector_store.py (auto-build on start-up)<br/><i>Load → transform → embed → store</i>"]
     L6["<b>Source Data Layer</b><br/>faq.csv · tickets.db · telecom_guide.pdf<br/>seed_tickets.py · generate_pdf.py"]
-    EXT["<b>External Services</b><br/>Groq API (LLM) · HuggingFace Hub (model download)"]
+    EXT["<b>External Services</b><br/>Google Gemini API (LLM) · HuggingFace Hub (model download)"]
     CFG["<b>Configuration</b><br/>config.py<br/><i>Paths, model names, chunking, k values</i>"]
 
     L1 --> L2 --> L3 --> L4
@@ -98,7 +98,7 @@ flowchart TB
 | Storage | `chroma_store/` | Vector persistence | ChromaDB (SQLite-backed) |
 | Ingestion | `ingest_*.py` | ETL into vector store | pandas, sqlite3, PyPDF, text splitters |
 | Source data | `data/` | Raw knowledge | CSV, SQLite, PDF (fpdf2) |
-| External | — | Inference & model hosting | Groq, HuggingFace |
+| External | — | Inference & model hosting | Google Gemini API, HuggingFace |
 | Configuration (cross-cutting) | `config.py` | Single source of truth for paths, collection names, embedding/LLM models, chunking and k values | Python `pathlib` |
 
 ---
@@ -177,7 +177,7 @@ sequenceDiagram
     participant R as Merged Retriever (retriever.py)
     participant E as Embedding Model (local)
     participant V as ChromaDB
-    participant L as Qwen3.8-27B (Groq)
+    participant L as Gemini 3.5 Flash (Google)
 
     U->>UI: "Why is my bill higher this month?"
     UI->>CH: chain.stream(question)
@@ -213,7 +213,7 @@ flowchart LR
     SPLIT -->|question| PASS["RunnablePassthrough"]
     FMT --> P["ChatPromptTemplate"]
     PASS --> P
-    P --> LLM["ChatGroq<br/>qwen/qwen3.8-27b<br/>temp=0 · retries=2"]
+    P --> LLM["ChatGoogleGenerativeAI<br/>gemini-3.5-flash<br/>temp=0 · retries=2"]
     LLM --> OUT["StrOutputParser"] --> A["answer (streamed str)"]
 ```
 
@@ -241,12 +241,12 @@ flowchart TB
         ST["Streamlit server :8501<br/>(or CLI process)"]
         PY["Python 3.11 runtime<br/>LangChain · sentence-transformers · PyTorch (CPU)"]
         FS[("Disk<br/>chroma_store/ · data/ · HF model cache")]
-        ENV[".env<br/>GROQ_API_KEY · HF_TOKEN"]
+        ENV[".env<br/>GEMINI_API_KEY · HF_TOKEN"]
         ST --- PY --- FS
         PY -.reads.-> ENV
     end
     B["🌐 Browser"] <-->|HTTP| ST
-    PY <-->|HTTPS · API key| GROQ["☁️ Groq Cloud<br/>LLM inference"]
+    PY <-->|HTTPS · API key| GEM["☁️ Google Gemini API<br/>LLM inference"]
     PY -->|first run only| HF["☁️ HuggingFace Hub<br/>model download"]
 ```
 
@@ -255,7 +255,7 @@ flowchart TB
 | Secrets | `.env` (git-ignored); template in `.env.example` |
 | Vector data | `chroma_store/` — a local SQLite file plus binary index folders; built automatically on first start-up (`setup_vector_store.py`) |
 | Embedding model | Downloaded once to the HuggingFace cache, then runs locally on CPU |
-| LLM | Remote — Groq API |
+| LLM | Remote — Google Gemini API (`langchain-google-genai`) |
 | Dependencies | `pyproject.toml` + `uv.lock` (managed by `uv`); `requirements.txt` exported for `pip` / hosting platforms. PyTorch pinned to the **CPU-only** build (no CUDA/NVIDIA packages); `torchvision` not used |
 | SQLite compatibility | ChromaDB needs SQLite ≥ 3.35. `sqlite_compat.py` (imported before ChromaDB everywhere) swaps in `pysqlite3-binary` only when the system SQLite is older; the package is installed on Linux x86_64 only |
 | Settings | `config.py`; all paths are absolute, built from the project folder, so scripts run from any working directory |
@@ -270,7 +270,7 @@ flowchart TB
 | 2 | **Three separate collections** instead of one | Guarantees every answer sees FAQ, ticket *and* guide context; prevents the numerous PDF chunks from crowding out FAQs | Always returns 9 docs, even if some are irrelevant |
 | 3 | **Fixed k=3 per collection** | Simple, predictable prompt size | No relevance threshold or re-ranking |
 | 4 | **Local embeddings (MiniLM-L6-v2)** | Free, fast on CPU, no data leaves the machine at embed time | Smaller model → lower semantic accuracy than large API embedders |
-| 5 | **Hosted LLM on Groq** | Very fast inference, no GPU needed locally | Requires internet + API key; question and context are sent to a third party |
+| 5 | **Hosted LLM: Gemini 3.5 Flash** (replaced Qwen on Groq) | Free tier, no GPU needed locally, and reachable from Streamlit Community Cloud. Groq returned *403 Access denied* from that platform's servers; the Groq code is kept commented out in `rag_chain.py` for switching back | Requires internet + API key; question and context are sent to a third party; free-tier rate limits, and the newest models can return *503 high demand* |
 | 6 | **`temperature=0`** | Deterministic, factual support answers | Less varied phrasing |
 | 7 | **Grounding prompt ("use ONLY the context")** with 611 fallback | Reduces hallucination; safe escalation path | May refuse questions it could have answered generally |
 | 8 | **Streaming output** | Better perceived latency | Slightly more complex UI code |
@@ -289,7 +289,7 @@ flowchart TB
 
 | Quality | Current state |
 |---|---|
-| **Latency** | Retrieval is local and fast (ms); total time dominated by Groq generation, hidden by streaming |
+| **Latency** | Retrieval is local and fast (ms); total time dominated by Gemini generation, hidden by streaming |
 | **Scalability** | Single-process; ChromaDB embedded mode. Suitable for a demo / small team |
 | **Reliability** | LLM calls retry up to 2 times; no fallback model |
 | **Security** | API keys in `.env`; no user authentication; no input sanitisation or PII filtering |
@@ -311,7 +311,7 @@ flowchart TB
 flowchart LR
     subgraph Today
         T1["Streamlit"] --> T2["LangChain chain"] --> T3[("Embedded Chroma")]
-        T2 --> T4["Groq"]
+        T2 --> T4["Gemini API"]
     end
     subgraph Production
         P0["Web / mobile / WhatsApp"] --> GW["API Gateway + Auth"]

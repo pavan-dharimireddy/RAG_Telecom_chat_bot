@@ -2,7 +2,7 @@
 
 > Based on the RAG tutorial by Dhaval Patel (codebasics). Extended with architecture docs and project notes.
 
-A Retrieval-Augmented Generation (RAG) customer care chatbot for telecom support. It answers questions about mobile connectivity, billing, SIM issues, and roaming by retrieving relevant context from three knowledge sources and generating responses with Qwen3.8-27B via Groq.
+A Retrieval-Augmented Generation (RAG) customer care chatbot for telecom support. It answers questions about mobile connectivity, billing, SIM issues, and roaming by retrieving relevant context from three knowledge sources and generating responses with Google's Gemini 3.5 Flash.
 
 ## Architecture
 
@@ -16,11 +16,11 @@ Merged Retriever (top-k from each store)
   └── ChromaDB · guides     (PDF guide chunks)
      │
      ▼
-ChatPromptTemplate → Qwen3.8-27B (Groq) → Answer
+ChatPromptTemplate → Gemini 3.5 Flash (Google) → Answer
 ```
 
 **Embedding model:** `sentence-transformers/all-MiniLM-L6-v2` (runs locally via HuggingFace)  
-**LLM:** `qwen/qwen3.8-27b` served by [Groq](https://groq.com)
+**LLM:** `gemini-3.5-flash` from [Google AI Studio](https://aistudio.google.com) (previously `qwen/qwen3.8-27b` on Groq, which blocks requests from Streamlit Community Cloud; the Groq code is kept commented out in `rag_chain.py`)
 
 For detailed diagrams and design decisions see [architecture.md](architecture.md). For a beginner-friendly, line-by-line guide to every script see [notes.md](notes.md).
 
@@ -58,7 +58,7 @@ rag-telecom-chatbot/
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- A [Groq API key](https://console.groq.com)
+- A [Gemini API key](https://aistudio.google.com) (free, from Google AI Studio → Get API key)
 - A [HuggingFace token](https://huggingface.co/settings/tokens) (optional: the embedding model is public; a token only raises download rate limits)
 
 ## Setup
@@ -82,7 +82,7 @@ cp .env.example .env
 Edit `.env` and fill in your keys:
 
 ```
-GROQ_API_KEY=your_groq_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 HF_TOKEN=your_huggingface_token_here
 ```
 
@@ -158,7 +158,7 @@ The app is set up to run on hosting platforms such as Hugging Face Spaces or Str
   uv export --format requirements-txt --no-hashes --no-dev --no-emit-project -o requirements.txt
   ```
 - **Old SQLite on Linux:** ChromaDB needs SQLite 3.35+. On Linux, `pysqlite3-binary` is installed and [sqlite_compat.py](sqlite_compat.py) switches to it only if the system SQLite is older.
-- **Secrets:** set `GROQ_API_KEY` in the platform's secrets settings (never commit `.env`).
+- **Secrets:** set `GEMINI_API_KEY` in the platform's secrets settings (never commit `.env`). Use exactly that name, in capitals: Linux servers are case-sensitive.
 
 ## License
 

@@ -59,7 +59,7 @@ When a customer asks something, the agent quickly flips through all three, picks
 | Term | Simple meaning |
 |---|---|
 | **RAG** (Retrieval-Augmented Generation) | "Look it up first, then answer." Retrieve relevant documents → give them to the AI → AI generates the answer. |
-| **LLM** (Large Language Model) | The AI that writes human-like text. Here: **Qwen3.8-27B**, running on **Groq**'s servers. |
+| **LLM** (Large Language Model) | The AI that writes human-like text. Here: Google's **Gemini 3.5 Flash** (originally Qwen on Groq; see [5.8](#58-rag_chainpy--the-brain)). |
 | **Embedding** | Turning a sentence into a list of 384 numbers(dimensions) that captures its *meaning*. Sentences with similar meaning get similar numbers — "internet is slow" and "data speed is poor" end up close together even though they share no words. |
 | **Embedding model** | The tool that makes embeddings. Here: **all-MiniLM-L6-v2**, a small free model that runs on your own computer. |
 | **Vector database** | A database that stores embeddings and can quickly find "the ones most similar to this question". Here: **ChromaDB**. |
@@ -545,17 +545,20 @@ K_GUIDES  = 3
 |---|---|---|
 | 31–33 | `K_FAQ`, `K_TICKETS`, `K_GUIDES` | How many results to fetch from each collection per question (3 + 3 + 3 = 9). Used as the defaults in `build_retriever()`. No re-ingest needed; just restart the app. |
 
-**Part 8: The AI model (lines 36–37)**
+**Part 8: The AI model (lines 36–39)**
 
 ```python
-LLM_MODEL       = "qwen/qwen3.8-27b"
+# Previous provider: Qwen on Groq (Groq returns "403 Access denied" from Streamlit Community Cloud)
+# LLM_MODEL       = "qwen/qwen3.8-27b"
+LLM_MODEL       = "gemini-3.5-flash"
 LLM_TEMPERATURE = 0
 ```
 
 | Line | Setting | What it does |
 |---|---|---|
-| 36 | `LLM_MODEL` | Which AI model Groq runs to write the answers. |
-| 37 | `LLM_TEMPERATURE` | The "randomness dial": 0 = consistent, factual answers. |
+| 36–37 | Comments | The old Groq model, kept as a comment so it's easy to switch back (see [5.8](#58-rag_chainpy--the-brain)). |
+| 38 | `LLM_MODEL` | Which Gemini model writes the answers. |
+| 39 | `LLM_TEMPERATURE` | The "randomness dial": 0 = consistent, factual answers. |
 
 #### Which script uses which setting
 
@@ -1387,18 +1390,18 @@ Issue: Double charged for monthly plan
 | 1 | `retriever \| _format_docs` | Find 9 snippets and format them as text |
 | 1 (in parallel) | `RunnablePassthrough()` | Pass the original question through unchanged |
 | 2 | `ChatPromptTemplate` | Fill the system prompt with context + add the question |
-| 3 | `ChatGroq` | Send to the AI model |
+| 3 | `ChatGoogleGenerativeAI` | Send to the AI model (Gemini) |
 | 4 | `StrOutputParser` | Extract plain text from the AI's response |
 
-**AI settings (`ChatGroq`)**
+**AI settings (`ChatGoogleGenerativeAI`)**
 
 | Setting | Value | Meaning |
 |---|---|---|
-| `model` | `qwen/qwen3.8-27b` | Which AI model to use |
+| `model` | `gemini-3.5-flash` | Which AI model to use |
 | `temperature` | `0` | No creativity/randomness — consistent, factual answers |
-| `max_tokens` | `None` | No artificial length limit |
-| `reasoning_format` | `"parsed"` | The model's internal "thinking" is separated out so only the final answer is shown |
 | `max_retries` | `2` | Retry twice if the network call fails |
+
+The original **Groq** settings are still in the file as comments, for switching back.
 
 #### Line-by-line walkthrough of `rag_chain.py`
 
@@ -1409,7 +1412,7 @@ Issue: Double charged for monthly plan
 ```python
 """
 Builds the RAG chain:
-  merged retriever → prompt → Qwen3.8-27B on Groq → string output
+  merged retriever → prompt → Gemini (Google) → string output
 """
 ```
 
@@ -1417,14 +1420,15 @@ Builds the RAG chain:
 |---|---|
 | 1–4 | Docstring: a one-line map of the pipeline this file builds. Search → prompt → AI → plain text. |
 
-**Part 2: Imports (lines 5–12)**
+**Part 2: Imports (lines 5–13)**
 
 ```python
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
-from langchain_groq import ChatGroq
+# from langchain_groq import ChatGroq  # previous provider, see build_chain()
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from config import LLM_MODEL, LLM_TEMPERATURE
 from retriever import build_retriever
@@ -1435,12 +1439,13 @@ from retriever import build_retriever
 | 5 | `ChatPromptTemplate` | A **fill-in-the-blanks message template** for chat AIs. You write the message once with blanks like `{context}` and `{question}`, and it fills them in for every new question. |
 | 6 | `StrOutputParser` | Takes the AI's reply (which arrives as a message object with extra details) and pulls out **just the text**. |
 | 7 | `RunnablePassthrough` | A building block that **passes its input through unchanged**. It's used to carry the customer's question forward to the prompt. |
-| 8 | `Document` | The Document type, used only in a type hint on line 31. |
-| 9 | `from langchain_groq import ChatGroq` | The connector to **Groq**, the cloud service that runs the Qwen AI model. |
-| 11 | `from config import LLM_MODEL, LLM_TEMPERATURE` | Brings in the AI model name and temperature from [config.py](config.py). The blank line before it is a Python convention: outside libraries first, then the project's own files. |
-| 12 | `from retriever import build_retriever` | Imports our own search tool from [retriever.py](retriever.py). |
+| 8 | `Document` | The Document type, used only in a type hint on line 32. |
+| 9 | `# from langchain_groq import ChatGroq` | The old connector to **Groq**, commented out (Python ignores lines starting with `#`). Kept for switching back. |
+| 10 | `from langchain_google_genai import ChatGoogleGenerativeAI` | The connector to **Google Gemini**, the AI that now writes the answers. |
+| 12 | `from config import LLM_MODEL, LLM_TEMPERATURE` | Brings in the AI model name and temperature from [config.py](config.py). The blank line before it is a Python convention: outside libraries first, then the project's own files. |
+| 13 | `from retriever import build_retriever` | Imports our own search tool from [retriever.py](retriever.py). |
 
-**Part 3: The system prompt, the bot's instructions (lines 14–28)**
+**Part 3: The system prompt, the bot's instructions (lines 15–29)**
 
 ```python
 SYSTEM_PROMPT = """You are a helpful and professional telecom customer care assistant.
@@ -1464,14 +1469,14 @@ A **system prompt** is the hidden instruction sheet given to the AI before the c
 
 | Line(s) | Text | What it does |
 |---|---|---|
-| 14 | `SYSTEM_PROMPT = """…` | Stores the instructions in a setting. Triple quotes `"""` allow text spanning many lines. |
-| 14–15 | "You are a helpful and professional telecom customer care assistant…" | Gives the AI a **role** and a **goal**, which sets its tone and focus. |
-| 17 | "Use **ONLY** the context below…" | **Grounding**: tells the AI not to rely on its general knowledge. This is the main defence against made-up answers (hallucinations). |
-| 18–21 | "The context comes from three sources, each labelled in square brackets: [FAQ]… [TICKET]… [GUIDE]…" | Explains what kinds of information it will receive, and uses the **same labels** that `_format_docs` puts on each snippet, so the AI knows how to treat each one: FAQs for policy, tickets for proven fixes, the guide for technical background. (An earlier version listed only FAQ and tickets, even though guide chunks were always sent. The AI still read them, but it wasn't told what they were.) |
-| 23–24 | "If the context does not contain enough information… call 611 or use the MyTelecom app." | A **safe fallback**: when unsure, admit it and point to a human channel instead of guessing. The `\` at the end of line 23 joins lines 23 and 22 into one line of text. |
-| 26–27 | `Context:` `{context}` | **The blank to fill in.** At run time, the 9 search results replace `{context}`. |
+| 15 | `SYSTEM_PROMPT = """…` | Stores the instructions in a setting. Triple quotes `"""` allow text spanning many lines. |
+| 15–16 | "You are a helpful and professional telecom customer care assistant…" | Gives the AI a **role** and a **goal**, which sets its tone and focus. |
+| 18 | "Use **ONLY** the context below…" | **Grounding**: tells the AI not to rely on its general knowledge. This is the main defence against made-up answers (hallucinations). |
+| 19–22 | "The context comes from three sources, each labelled in square brackets: [FAQ]… [TICKET]… [GUIDE]…" | Explains what kinds of information it will receive, and uses the **same labels** that `_format_docs` puts on each snippet, so the AI knows how to treat each one: FAQs for policy, tickets for proven fixes, the guide for technical background. (An earlier version listed only FAQ and tickets, even though guide chunks were always sent. The AI still read them, but it wasn't told what they were.) |
+| 24–25 | "If the context does not contain enough information… call 611 or use the MyTelecom app." | A **safe fallback**: when unsure, admit it and point to a human channel instead of guessing. The `\` at the end of line 24 joins lines 24 and 22 into one line of text. |
+| 27–28 | `Context:` `{context}` | **The blank to fill in.** At run time, the 9 search results replace `{context}`. |
 
-**Part 4: Formatting the search results (lines 31–36)**
+**Part 4: Formatting the search results (lines 32–37)**
 
 ```python
 def _format_docs(docs: list[Document]) -> str:
@@ -1486,12 +1491,12 @@ The retriever returns a list of 9 Document objects, but the prompt needs **plain
 
 | Line | Code | What it does |
 |---|---|---|
-| 31 | `def _format_docs(docs: list[Document]) -> str:` | Takes a list of Documents and returns one string. The `_` at the start of the name is a Python convention meaning "**internal helper**, only meant to be used inside this file". |
-| 32 | `sections = []` | Empty list to collect each formatted snippet. |
-| 33 | `for doc in docs:` | Go through the 9 Documents one by one. |
-| 34 | `source = doc.metadata.get("source", "unknown").upper()` | Reads the `source` label set by the ingest scripts (`faq`, `ticket` or `guide`). `.get(..., "unknown")` uses `"unknown"` if the label is missing, instead of crashing. `.upper()` makes it capitals: `FAQ`, `TICKET`, `GUIDE`. |
-| 35 | `sections.append(f"[{source}]\n{doc.page_content}")` | Builds one labelled snippet: the label in square brackets, a line break, then the text. |
-| 36 | `return "\n\n---\n\n".join(sections)` | Glues all snippets into one block, with a `---` divider and blank lines between them, so the AI can clearly see where one snippet ends and the next begins. |
+| 32 | `def _format_docs(docs: list[Document]) -> str:` | Takes a list of Documents and returns one string. The `_` at the start of the name is a Python convention meaning "**internal helper**, only meant to be used inside this file". |
+| 33 | `sections = []` | Empty list to collect each formatted snippet. |
+| 34 | `for doc in docs:` | Go through the 9 Documents one by one. |
+| 35 | `source = doc.metadata.get("source", "unknown").upper()` | Reads the `source` label set by the ingest scripts (`faq`, `ticket` or `guide`). `.get(..., "unknown")` uses `"unknown"` if the label is missing, instead of crashing. `.upper()` makes it capitals: `FAQ`, `TICKET`, `GUIDE`. |
+| 36 | `sections.append(f"[{source}]\n{doc.page_content}")` | Builds one labelled snippet: the label in square brackets, a line break, then the text. |
+| 37 | `return "\n\n---\n\n".join(sections)` | Glues all snippets into one block, with a `---` divider and blank lines between them, so the AI can clearly see where one snippet ends and the next begins. |
 
 **Real output** for the question *"How do I enable Wi-Fi calling?"* (first part shown; the full block is about 3,300 characters):
 
@@ -1512,7 +1517,7 @@ A: International calling must be enabled on your account...
 ...  (then 3 [TICKET] snippets and 3 [GUIDE] snippets)
 ```
 
-**Part 5: Building the chain (lines 39–40)**
+**Part 5: Building the chain (lines 40–41)**
 
 ```python
 def build_chain():
@@ -1521,10 +1526,10 @@ def build_chain():
 
 | Line | Code | What it does |
 |---|---|---|
-| 39 | `def build_chain():` | The main function. `app.py` and `main.py` call it **once** at start-up to get a ready-to-use chatbot pipeline. |
-| 40 | `retriever = build_retriever()` | Creates the search tool from [retriever.py](retriever.py) (loads the embedding model, opens the 3 collections). Uses the default 3 results per collection. |
+| 40 | `def build_chain():` | The main function. `app.py` and `main.py` call it **once** at start-up to get a ready-to-use chatbot pipeline. |
+| 41 | `retriever = build_retriever()` | Creates the search tool from [retriever.py](retriever.py) (loads the embedding model, opens the 3 collections). Uses the default 3 results per collection. |
 
-**Part 6: The prompt template (lines 42–45)**
+**Part 6: The prompt template (lines 43–46)**
 
 ```python
     prompt = ChatPromptTemplate.from_messages([
@@ -1537,38 +1542,50 @@ Chat AIs receive a conversation as a list of messages, each with a **role**:
 
 | Line | Code | What it does |
 |---|---|---|
-| 42 | `ChatPromptTemplate.from_messages([...])` | Creates the template from a list of (role, text) pairs. |
-| 43 | `("system", SYSTEM_PROMPT)` | **Message 1, role "system"**: the instructions + the context (blank `{context}`). The AI treats this as its rules. |
-| 44 | `("human", "{question}")` | **Message 2, role "human"**: the customer's question (blank `{question}`). |
+| 43 | `ChatPromptTemplate.from_messages([...])` | Creates the template from a list of (role, text) pairs. |
+| 44 | `("system", SYSTEM_PROMPT)` | **Message 1, role "system"**: the instructions + the context (blank `{context}`). The AI treats this as its rules. |
+| 45 | `("human", "{question}")` | **Message 2, role "human"**: the customer's question (blank `{question}`). |
 
 When filled in for the Wi-Fi example, the AI receives 2 messages: a system message of about **3,800 characters** (instructions + 9 snippets) and a human message of **30 characters** (the question). Almost all of what the AI reads is the retrieved context.
 
-**Part 7: The AI model settings (lines 47–54)**
+**Part 7: The AI model settings (lines 48–65)**
 
 ```python
-    llm = ChatGroq(
+    # Previous provider: Qwen on Groq. Groq returns "403 Access denied" from Streamlit Community
+    # Cloud's servers, so it was replaced by Gemini. To switch back: uncomment this block and the
+    # ChatGroq import, comment out the Gemini block, set LLM_MODEL in config.py and GROQ_API_KEY.
+    # llm = ChatGroq(
+    #     model=LLM_MODEL,
+    #     temperature=LLM_TEMPERATURE,
+    #     max_tokens=None,
+    #     reasoning_format="parsed",
+    #     timeout=None,
+    #     max_retries=2,
+    # )
+
+    # Reads the key from the GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable
+    llm = ChatGoogleGenerativeAI(
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
-        max_tokens=None,
-        reasoning_format="parsed",
-        timeout=None,
         max_retries=2,
     )
 ```
 
 `llm` stands for **Large Language Model**. This creates the connection to the AI; nothing is sent yet.
 
+**The commented-out Groq block (lines 48–58):** the project originally used **Qwen on Groq**. When the app was deployed to Streamlit Community Cloud, Groq refused every request with *"403 Access denied"* because it blocks that platform's servers, so the AI was switched to **Google Gemini**. The old code is kept as **comments** (lines starting with `#`, which Python ignores) rather than deleted, so it's easy to see what changed and to switch back. Lines 48–50 explain how.
+
 | Line | Setting | What it does |
 |---|---|---|
-| 47 | `ChatGroq(...)` | Connects to Groq. It automatically reads your **`GROQ_API_KEY`** from the environment (loaded from `.env` by `app.py` / `main.py`). If the key is missing, this is where it fails. |
-| 48 | `model=LLM_MODEL` | Which AI model Groq should run. Set in [config.py](config.py) to `"qwen/qwen3.8-27b"`: Qwen3.8 with 27 billion parameters. |
-| 49 | `temperature=LLM_TEMPERATURE` | Set to `0` in [config.py](config.py). **Randomness dial.** 0 = always pick the most likely next word → consistent, factual answers. Higher values (e.g. 0.7) give more varied, creative wording. Support answers should be predictable, so 0 is right here. |
-| 50 | `max_tokens=None` | No limit on answer length; the model decides when it's finished. |
-| 51 | `reasoning_format="parsed"` | Qwen is a "**reasoning**" model: it thinks step by step before answering. `"parsed"` tells Groq to put that thinking in a **separate field**, so it doesn't appear in the customer's answer. (Other options: `"raw"` would mix the thinking into the answer; `"hidden"` would drop it entirely.) |
-| 52 | `timeout=None` | No time limit on waiting for Groq's reply. |
-| 53 | `max_retries=2` | If the request fails (network glitch, Groq briefly busy), try **2 more times** before giving up. |
+| 60 | `# Reads the key from …` | Comment: where the API key comes from. |
+| 61 | `ChatGoogleGenerativeAI(...)` | Connects to Google's **Gemini** API. It automatically reads your key from the **`GEMINI_API_KEY`** (or `GOOGLE_API_KEY`) environment variable, loaded from `.env` by `app.py` / `main.py`, or from **Secrets** on Streamlit Cloud. If the key is missing, this is where it fails. |
+| 62 | `model=LLM_MODEL` | Which Gemini model to use. Set in [config.py](config.py) to `"gemini-3.5-flash"`: a fast, free-tier-friendly model. (The newest `gemini-3.8-flash` was tried first but often returned *"503 high demand"*.) |
+| 63 | `temperature=LLM_TEMPERATURE` | Set to `0` in [config.py](config.py). **Randomness dial.** 0 = always pick the most likely next word → consistent, factual answers. Higher values (e.g. 0.7) give more varied, creative wording. Support answers should be predictable, so 0 is right here. |
+| 64 | `max_retries=2` | If the request fails (network glitch, Gemini briefly busy), try **2 more times** before giving up. |
 
-**Part 8: Connecting everything into one pipeline (lines 56–62)**
+**Groq vs Gemini settings:** Groq's `reasoning_format="parsed"` isn't needed here. Gemini keeps its internal "thinking" out of the answer text by default. `max_tokens=None` and `timeout=None` were Groq's defaults anyway, so they're simply left out.
+
+**Part 8: Connecting everything into one pipeline (lines 67–73)**
 
 ```python
     chain = (
@@ -1584,13 +1601,13 @@ This is the heart of the file. It's written in **LCEL** (LangChain Expression La
 
 | Line | Code | What it does |
 |---|---|---|
-| 57 | `{"context": …, "question": …}` | A **two-lane step**. The customer's question goes into *both* lanes at the same time, and the result is a dictionary with two named items. LangChain automatically turns `{ }` into a parallel step. |
-| 57 | `"context": retriever \| _format_docs` | **Lane 1:** question → search (9 Documents) → format into one labelled text block. Result is stored as `context`. |
-| 57 | `"question": RunnablePassthrough()` | **Lane 2:** the question passes through **unchanged** and is stored as `question`. Needed because the prompt has a `{question}` blank to fill, too. |
-| 58 | `\| prompt` | Takes `{context, question}` and **fills the blanks** in the template → 2 ready chat messages. |
-| 59 | `\| llm` | Sends the messages to **Qwen on Groq** → receives the AI's reply. |
-| 60 | `\| StrOutputParser()` | Pulls out **just the answer text** from the reply (dropping the separate reasoning and other details). |
-| 62 | `return chain` | Hands the finished pipeline back to `app.py` / `main.py`. |
+| 68 | `{"context": …, "question": …}` | A **two-lane step**. The customer's question goes into *both* lanes at the same time, and the result is a dictionary with two named items. LangChain automatically turns `{ }` into a parallel step. |
+| 68 | `"context": retriever \| _format_docs` | **Lane 1:** question → search (9 Documents) → format into one labelled text block. Result is stored as `context`. |
+| 68 | `"question": RunnablePassthrough()` | **Lane 2:** the question passes through **unchanged** and is stored as `question`. Needed because the prompt has a `{question}` blank to fill, too. |
+| 69 | `\| prompt` | Takes `{context, question}` and **fills the blanks** in the template → 2 ready chat messages. |
+| 70 | `\| llm` | Sends the messages to **Gemini** → receives the AI's reply. |
+| 71 | `\| StrOutputParser()` | Pulls out **just the answer text** from the reply (dropping the separate reasoning and other details). |
+| 73 | `return chain` | Hands the finished pipeline back to `app.py` / `main.py`. |
 
 **The whole journey of one question:**
 
@@ -1603,7 +1620,7 @@ This is the heart of the file. It's written in **LCEL** (LangChain Expression La
         ▼
    prompt     → [system: instructions + context]  [human: question]
         ▼
-   llm        → Qwen thinks, then writes the answer (on Groq's servers)
+   llm        → Gemini writes the answer (on Google's servers)
         ▼
    StrOutputParser → "To enable Wi-Fi calling, go to Settings > Phone > Wi-Fi Calling…"
 ```
@@ -1627,24 +1644,24 @@ Both `app.py` and `main.py` use **`.stream()`**. The search and prompt-filling s
 
 | To change… | Edit |
 |---|---|
-| The bot's tone, rules or fallback message | `SYSTEM_PROMPT` (lines 14–28) |
-| How snippets are labelled for the AI | `_format_docs` (lines 31–36) |
+| The bot's tone, rules or fallback message | `SYSTEM_PROMPT` (lines 15–29) |
+| How snippets are labelled for the AI | `_format_docs` (lines 32–37) |
 | The AI model | `LLM_MODEL` in [config.py](config.py) |
 | How creative the answers are | `LLM_TEMPERATURE` in [config.py](config.py) |
 | How many search results the AI sees | `K_FAQ`, `K_TICKETS`, `K_GUIDES` in [config.py](config.py) |
 
 #### Common questions about `rag_chain.py`
 
-**Q: On line 40, `retriever = build_retriever()`, we don't pass the question. Why?**
+**Q: On line 41, `retriever = build_retriever()`, we don't pass the question. Why?**
 
 Because that line **builds** the search tool; it doesn't **use** it yet. There are two separate moments:
 
 | Moment | Code | What happens | Question involved? |
 |---|---|---|---|
-| **1. Build** (once, at start-up) | `retriever = build_retriever()` (line 40) | Loads the embedding model, opens the 3 collections, creates the 3 retrievers, and returns the `retrieve` function wrapped in a `RunnableLambda` | ❌ No |
+| **1. Build** (once, at start-up) | `retriever = build_retriever()` (line 41) | Loads the embedding model, opens the 3 collections, creates the 3 retrievers, and returns the `retrieve` function wrapped in a `RunnableLambda` | ❌ No |
 | **2. Use** (every question) | `chain.stream(question)` in `app.py` / `main.py` | The question flows through the pipeline and reaches the retriever | ✅ Yes |
 
-**An analogy:** line 40 is like **installing a coffee machine**: plugging it in, filling the water and beans. You don't need a coffee order to install it. Each customer's question is **pressing the button**, which can happen many times on the same machine.
+**An analogy:** line 41 is like **installing a coffee machine**: plugging it in, filling the water and beans. You don't need a coffee order to install it. Each customer's question is **pressing the button**, which can happen many times on the same machine.
 
 **Why it's designed this way:** building is **slow** (loading the model and opening the database takes a few seconds), while searching is **fast** (milliseconds). By building once and reusing it for every question, the app avoids reloading everything on each message. That's also why `app.py` caches the chain with `@st.cache_resource`.
 
@@ -1666,7 +1683,7 @@ response = st.write_stream(chain.stream(question))
 ```
 
 ```python
-# ② rag_chain.py, line 57: LangChain hands the question to the retriever automatically
+# ② rag_chain.py, line 68: LangChain hands the question to the retriever automatically
 {"context": retriever | _format_docs, "question": RunnablePassthrough()}
 ```
 
@@ -1680,7 +1697,7 @@ def retrieve(query: str) -> list[Document]:
     )
 ```
 
-**Q: On line 57, how does the question get in automatically when nothing seems to accept it as an argument?**
+**Q: On line 68, how does the question get in automatically when nothing seems to accept it as an argument?**
 
 It *is* accepted as an argument: `query` in `retrieve(query: str)` in [retriever.py](retriever.py). You just never see the call, because **LangChain makes the call for you**.
 
@@ -1737,7 +1754,7 @@ And `retriever.invoke(question)` is what finally calls `retrieve(query)`, with `
 def chain(question):                                  # ← the question IS an argument
     context  = _format_docs(retrieve(question))       # lane 1
     messages = fill_prompt(context, question)         # lane 2 + prompt
-    reply    = call_groq(messages)                    # llm
+    reply    = call_gemini(messages)                  # llm
     return reply.text                                 # StrOutputParser
 ```
 
@@ -1762,7 +1779,7 @@ This is also why [retriever.py](retriever.py) wraps `retrieve` in `RunnableLambd
 
 Yes, that's correct, with two small refinements.
 
-**Step 1: `retriever = build_retriever()` (line 40, once at start-up)**
+**Step 1: `retriever = build_retriever()` (line 41, once at start-up)**
 
 - Loads the embedding model.
 - Opens the three ChromaDB collections (`faq`, `tickets`, `guides`).
@@ -1774,7 +1791,7 @@ So `retriever` is a **wrapper holding the `retrieve` function**.
 
 > **Refinement 1: "connection" to ChromaDB.** ChromaDB here isn't a separate server you connect to over a network. It runs **inside your Python program** and reads the files in `chroma_store/`. So "opens the database files" is more accurate than "establishes a connection". The effect is the same: it's ready to search.
 
-**Step 2: `{"context": retriever | _format_docs, ...}` (line 57)**
+**Step 2: `{"context": retriever | _format_docs, ...}` (line 68)**
 
 This only **records** that "the retriever comes first, then `_format_docs`". Nothing runs yet.
 
@@ -2047,7 +2064,8 @@ if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
 
 | Key | Where to get it | Used for |
 |---|---|---|
-| `GROQ_API_KEY` | https://console.groq.com | Calling the AI model |
+| `GEMINI_API_KEY` | https://aistudio.google.com → **Get API key** (free) | Calling the AI model (Gemini) |
+| ~~`GROQ_API_KEY`~~ | https://console.groq.com | Previous AI provider; only needed if you switch back to Groq |
 | `HF_TOKEN` | https://huggingface.co/settings/tokens | Downloading the embedding model (optional, see below) |
 
 **Q: Is `HF_TOKEN` really required?**
@@ -2078,7 +2096,8 @@ Hardly. The model is small (about 88 MB) and is downloaded only **once**. After 
 | Library | Role |
 |---|---|
 | `langchain`, `langchain-core` | Pipeline framework |
-| `langchain-groq` | Connects LangChain to Groq's AI |
+| `langchain-google-genai` | Connects LangChain to Google's Gemini AI |
+| `langchain-groq` | Connects LangChain to Groq's AI (previous provider, kept for switching back) |
 | `langchain-chroma`, `chromadb` | Vector database |
 | `langchain-huggingface`, `sentence-transformers`, `torch` | Embedding model. `torch` (PyTorch) is pinned to the small **CPU-only** build, since the GPU build adds several GB this app never uses |
 | `pysqlite3-binary` | A newer SQLite, installed **on Linux servers only**, used by `sqlite_compat.py` if the server's own SQLite is too old for ChromaDB |
@@ -2124,7 +2143,7 @@ python main.py               # terminal
 | 3 | `retriever.py` | The question is converted to 384 numbers by MiniLM. |
 | 4 | ChromaDB | Finds the closest matches: FAQs about roaming bundles, **ticket TK-004** (bundle activated 3 hours late → 50% credit), and the guide's roaming chapter. |
 | 5 | `rag_chain.py` | 9 snippets are labelled `[FAQ]`, `[TICKET]`, `[GUIDE]` and placed in the prompt along with the rules and the question. |
-| 6 | Groq | Qwen reads everything and writes an answer, e.g. explaining that charges before the bundle was activated are billed at standard rates and that the customer can request a review/goodwill credit. |
+| 6 | Gemini | Gemini reads everything and writes an answer, e.g. explaining that charges before the bundle was activated are billed at standard rates and that the customer can request a review/goodwill credit. |
 | 7 | `app.py` | The answer appears word by word and is saved to the chat history. |
 
 ---
@@ -2161,7 +2180,8 @@ python main.py               # terminal
 | Problem | Likely cause | Fix |
 |---|---|---|
 | Bot says it doesn't have enough information for everything | `chroma_store/` is empty or missing | Normally fixed automatically on start-up. If it persists, run `python setup_vector_store.py` and restart the app |
-| `GROQ_API_KEY` / authentication error | `.env` missing or wrong key | Check `.env` exists and the key is valid |
+| `GEMINI_API_KEY` / authentication error | `.env` missing or wrong key | Check `.env` exists and the key name is exactly `GEMINI_API_KEY` (capitals matter on Linux) |
+| `503 UNAVAILABLE … high demand` from Gemini | That model is overloaded on Google's side | Temporary. Retry, or use a less busy model in `LLM_MODEL` (e.g. `gemini-3.5-flash`) |
 | Very slow first start (or first question) | Embedding model downloading and/or the database being built for the first time | Wait (about a minute); both are kept for next time |
 | `unsupported version of sqlite3` from ChromaDB | Old SQLite on a Linux server, and `pysqlite3-binary` isn't installed | Install from `requirements.txt` (it includes `pysqlite3-binary` on Linux) |
 | Same snippet appears several times in answers | Database was built with an older version of the ingest scripts, which added copies on every run | Delete `chroma_store/` and run the three ingest scripts once (current scripts no longer duplicate) |

@@ -1,12 +1,13 @@
 """
 Builds the RAG chain:
-  merged retriever → prompt → Qwen3.8-27B on Groq → string output
+  merged retriever → prompt → Gemini (Google) → string output
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
-from langchain_groq import ChatGroq
+# from langchain_groq import ChatGroq  # previous provider, see build_chain()
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from config import LLM_MODEL, LLM_TEMPERATURE
 from retriever import build_retriever
@@ -44,12 +45,22 @@ def build_chain():
         ("human", "{question}"),
     ])
 
-    llm = ChatGroq(
+    # Previous provider: Qwen on Groq. Groq returns "403 Access denied" from Streamlit Community
+    # Cloud's servers, so it was replaced by Gemini. To switch back: uncomment this block and the
+    # ChatGroq import, comment out the Gemini block, set LLM_MODEL in config.py and GROQ_API_KEY.
+    # llm = ChatGroq(
+    #     model=LLM_MODEL,
+    #     temperature=LLM_TEMPERATURE,
+    #     max_tokens=None,
+    #     reasoning_format="parsed",
+    #     timeout=None,
+    #     max_retries=2,
+    # )
+
+    # Reads the key from the GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable
+    llm = ChatGoogleGenerativeAI(
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
-        max_tokens=None,
-        reasoning_format="parsed",
-        timeout=None,
         max_retries=2,
     )
 

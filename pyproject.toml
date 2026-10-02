@@ -7,7 +7,8 @@ dependencies = [
     "langchain",
     "langchain-core",
     "langchain-chroma",
-    "langchain-groq",
+    "langchain-groq",  # previous LLM provider, kept so it can be switched back (see rag_chain.py)
+    "langchain-google-genai",
     "langchain-huggingface",
     "chromadb",
     "sentence-transformers",
