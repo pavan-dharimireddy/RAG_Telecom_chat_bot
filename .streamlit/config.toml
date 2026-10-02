@@ -1,0 +1,16 @@
+# "Midnight Teal" theme: deep navy background with teal accents.
+# Not secret: safe to commit (secrets go in .streamlit/secrets.toml, which is git-ignored).
+
+[theme]
+base = "dark"
+primaryColor = "#14B8A6"              # teal: buttons, links, focus outlines, send arrow
+backgroundColor = "#0B1220"           # deep navy: main page
+secondaryBackgroundColor = "#16213A"  # navy: chat input, chat bubbles, widgets
+textColor = "#E2E8F0"                 # soft white
+borderColor = "#24324F"
+linkColor = "#2DD4BF"                 # lighter teal so links stand out on navy
+
+[theme.sidebar]
+backgroundColor = "#111A2E"           # navy panel, slightly lighter than the page
+secondaryBackgroundColor = "#1B2742"  # sample-question buttons
+borderColor = "#2A3A5C"

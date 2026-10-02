@@ -1,5 +1,7 @@
 # RAG Telecom Chatbot
 
+**🚀 Live demo:** [ragtelecomchatbot-pavan.streamlit.app](https://ragtelecomchatbot-pavan.streamlit.app/) *(if the app has been idle, click "wake up" and wait about a minute)*
+
 > Based on the RAG tutorial by Dhaval Patel (codebasics). Extended with architecture docs and project notes.
 
 A Retrieval-Augmented Generation (RAG) customer care chatbot for telecom support. It answers questions about mobile connectivity, billing, SIM issues, and roaming by retrieving relevant context from three knowledge sources and generating responses with Google's Gemini 3.5 Flash.
@@ -147,6 +149,42 @@ python data/generate_pdf.py
 ```
 
 After regenerating, re-run the corresponding ingest script.
+
+## Deploy on Streamlit Community Cloud
+
+You can host your own copy for free on [Streamlit Community Cloud](https://streamlit.io/cloud).
+
+**1. Get the code into your GitHub account.** Fork this repository (the **Fork** button at the top of the GitHub page).
+
+**2. Get a free Gemini API key.** Go to [Google AI Studio](https://aistudio.google.com), sign in with a Google account, click **Get API key → Create API key**, and copy the key (it starts with `AIza`).
+
+**3. Create the app**
+
+1. Sign in at [share.streamlit.io](https://share.streamlit.io) with your GitHub account.
+2. Click **Create app** (or **New app**) and choose:
+   - **Repository:** `<your-username>/RAG_Telecom_chat_bot`
+   - **Branch:** `main`
+   - **Main file path:** `app.py`
+3. Open **Advanced settings → Secrets** and paste:
+   ```toml
+   GEMINI_API_KEY = "AIza...your-key..."
+   ```
+   The name must be exactly `GEMINI_API_KEY`, in capitals, with the value in double quotes and no `[section]` header above it.
+4. Click **Deploy**.
+
+**4. Test it.** The first build takes a few minutes while the libraries install. The **first question** on a fresh server takes about a minute longer, because the vector database is built automatically on first start; after that, answers come back in seconds.
+
+**Troubleshooting**
+
+| Error | Fix |
+|---|---|
+| `The api_key client option must be set…` or another missing-key error | The secret isn't being picked up. Check the name is exactly `GEMINI_API_KEY`, then **⋮ → Reboot app** |
+| `503 UNAVAILABLE … high demand` | The Gemini model is temporarily overloaded. Retry, or pick another model in `LLM_MODEL` in [config.py](config.py) |
+| Long `No module named 'torchvision'` tracebacks in the logs | Harmless: Streamlit's file watcher scanning unused image modules in `transformers`. Answers are unaffected |
+
+> **Why Gemini and not Groq?** The project originally used Qwen on Groq, but Groq returns `403 Access denied` for requests from Streamlit Community Cloud's servers. The Groq code is kept commented out in [rag_chain.py](rag_chain.py) if you want to run it elsewhere.
+
+You can update the secret later under **Manage app → ⋮ → Settings → Secrets**. Every `git push` to `main` redeploys the app automatically.
 
 ## Deployment notes
 
